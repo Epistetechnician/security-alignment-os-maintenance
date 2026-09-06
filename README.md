@@ -21,6 +21,11 @@ policy, and every admission decision is recorded in a replayable digest chain.
 This is local regression evidence, not proof of model safety, alignment,
 corrigibility, production readiness, or full security.
 
+All implementation is clean-room. No code, artifacts, datasets, traces, or
+generated outputs are ported from another local or remote repository. Public
+SOTA specifications may inform independent reimplementation only when license
+and provenance are recorded. See [clean-room policy](docs/clean-room-policy.md).
+
 ## Components
 
 - `alignment_os.models`: canonical typed contracts and claim composition.

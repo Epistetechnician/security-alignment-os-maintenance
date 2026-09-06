@@ -12,6 +12,13 @@ authority, or scientific alignment claim is permitted in the foundation slice.
 Every mutation in this repository must name the state slice
 `security-alignment-os-foundation-v1` in its change record or commit message.
 
+Clean-room rule: do not port code, artifacts, datasets, traces, generated
+outputs, or hidden implementation details from the source repository, any other
+local repository, or any remote repository. SOTA work may be independently
+reimplemented only from explicitly documented public specifications, with a
+license and provenance record. Semi-closed-source material is excluded unless
+redistribution and implementation rights are explicit and reviewable.
+
 Preserve unrelated work. Keep the codebase clean: no temporary files, dead
 code, dead files, or generated artifacts. Use Python's standard library unless
 a separately authorized slice adds a dependency. Run `python3 -m unittest` and

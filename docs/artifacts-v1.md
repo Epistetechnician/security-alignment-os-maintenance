@@ -21,7 +21,8 @@ Quarantine requires distinct non-empty operator and validator role assertions.
 Acceptance requires the record to remain quarantined and within its retention
 interval, an exact subject-digest match supplied at review time, and a
 non-empty reviewer assertion distinct from both earlier roles. Revocation also
-requires the exact subject digest and is terminal for the record.
+requires the exact subject digest, cannot predate acceptance, and is terminal
+for the record. A rejected transition leaves the in-memory record unchanged.
 
 `is_valid` and `require_valid` require accepted status, a live retention
 interval, the exact subject digest, and all three distinct role assertions.

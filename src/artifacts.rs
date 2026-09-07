@@ -285,6 +285,11 @@ impl ArtifactRegistry {
         if !valid_digest(subject_digest) {
             return Err(Error::Invalid("revoke subject digest is malformed".into()));
         }
+        let previous = self
+            .records
+            .get(artifact_id)
+            .cloned()
+            .ok_or_else(|| Error::Invalid("artifact not found".into()))?;
         let record = self
             .records
             .get_mut(artifact_id)
@@ -295,8 +300,20 @@ impl ArtifactRegistry {
         if !record.manifest.binds_subject(subject_digest) {
             return Err(Error::Rejected("artifact subject binding mismatch".into()));
         }
+        if record
+            .accepted_at
+            .is_some_and(|accepted_at| now < accepted_at)
+        {
+            return Err(Error::Rejected(
+                "artifact revocation predates acceptance".into(),
+            ));
+        }
         record.status = ArtifactStatus::Revoked;
         record.revoked_at = Some(now);
+        if let Err(error) = self.validate() {
+            self.records.insert(artifact_id.into(), previous);
+            return Err(error);
+        }
         Ok(())
     }
 
@@ -441,6 +458,24 @@ mod tests {
         assert!(registry.revoke("artifact-1", &subject, 13).is_ok());
         assert!(!registry.is_valid("artifact-1", &subject, 13));
         assert!(registry.revoke("artifact-1", &subject, 14).is_err());
+    }
+
+    #[test]
+    fn revocation_before_acceptance_is_rejected_without_mutation() {
+        let item = manifest();
+        let subject = item.subject_digest.clone();
+        let mut registry = ArtifactRegistry::default();
+        registry
+            .quarantine(item, "operator", "validator")
+            .expect("quarantine");
+        registry
+            .accept("artifact-1", &subject, "reviewer", 12)
+            .expect("accept");
+        let before = registry.clone();
+
+        assert!(registry.revoke("artifact-1", &subject, 11).is_err());
+        assert_eq!(registry, before);
+        registry.validate().expect("state remains valid");
     }
 
     #[test]

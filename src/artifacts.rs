@@ -11,6 +11,8 @@
 use crate::{digest, valid_digest, Error, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
+use std::fs;
+use std::path::Path;
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct ArtifactManifest {
@@ -133,6 +135,77 @@ fn validate_distinct_roles(operator_id: &str, validator_id: &str) -> Result<()> 
 }
 
 impl ArtifactRegistry {
+    /// Validates every persisted record and its lifecycle invariants.
+    pub fn validate(&self) -> Result<()> {
+        for (artifact_id, record) in &self.records {
+            record.manifest.validate()?;
+            if artifact_id != &record.manifest.artifact_id {
+                return Err(Error::Invalid("artifact registry key mismatch".into()));
+            }
+            validate_distinct_roles(&record.operator_id, &record.validator_id)?;
+            match record.status {
+                ArtifactStatus::Quarantined => {
+                    if record.reviewer_id.is_some()
+                        || record.accepted_at.is_some()
+                        || record.revoked_at.is_some()
+                    {
+                        return Err(Error::Invalid(
+                            "quarantined artifact lifecycle fields are inconsistent".into(),
+                        ));
+                    }
+                }
+                ArtifactStatus::Accepted => {
+                    let reviewer = record.reviewer_id.as_deref().ok_or_else(|| {
+                        Error::Invalid("accepted artifact reviewer is missing".into())
+                    })?;
+                    validate_role(reviewer, "reviewer")?;
+                    if reviewer == record.operator_id || reviewer == record.validator_id {
+                        return Err(Error::Invalid(
+                            "accepted artifact reviewer role collides".into(),
+                        ));
+                    }
+                    let accepted_at = record.accepted_at.ok_or_else(|| {
+                        Error::Invalid("accepted artifact timestamp is missing".into())
+                    })?;
+                    if !record.manifest.active(accepted_at) || record.revoked_at.is_some() {
+                        return Err(Error::Invalid(
+                            "accepted artifact lifecycle timestamps are invalid".into(),
+                        ));
+                    }
+                }
+                ArtifactStatus::Revoked => {
+                    let revoked_at = record.revoked_at.ok_or_else(|| {
+                        Error::Invalid("revoked artifact timestamp is missing".into())
+                    })?;
+                    if let Some(accepted_at) = record.accepted_at {
+                        if !record.manifest.active(accepted_at)
+                            || revoked_at < accepted_at
+                            || record.reviewer_id.is_none()
+                        {
+                            return Err(Error::Invalid(
+                                "revoked accepted artifact lifecycle is invalid".into(),
+                            ));
+                        }
+                        let reviewer = record.reviewer_id.as_deref().ok_or_else(|| {
+                            Error::Invalid("revoked accepted artifact reviewer is missing".into())
+                        })?;
+                        validate_role(reviewer, "reviewer")?;
+                        if reviewer == record.operator_id || reviewer == record.validator_id {
+                            return Err(Error::Invalid(
+                                "revoked artifact reviewer role collides".into(),
+                            ));
+                        }
+                    } else if record.reviewer_id.is_some() {
+                        return Err(Error::Invalid(
+                            "revoked quarantined artifact has a reviewer".into(),
+                        ));
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
     /// Place a validated artifact into quarantine.  Quarantine does not make
     /// the subject usable; acceptance is a separate transition.
     pub fn quarantine(
@@ -271,6 +344,41 @@ impl ArtifactRegistry {
     pub fn is_empty(&self) -> bool {
         self.records.is_empty()
     }
+
+    /// Saves a validated canonical registry snapshot through a temporary path.
+    pub fn save(&self, path: &Path) -> Result<()> {
+        self.validate()?;
+        let temporary = path.with_extension("tmp");
+        fs::write(&temporary, crate::canonical_bytes(self)?)?;
+        fs::rename(temporary, path)?;
+        Ok(())
+    }
+
+    pub fn load(path: &Path) -> Result<Self> {
+        let bytes = fs::read(path)?;
+        let registry: Self = serde_json::from_slice(&bytes)?;
+        if crate::canonical_bytes(&registry)? != bytes {
+            return Err(Error::Journal(
+                "artifact registry bytes are not canonical JSON".into(),
+            ));
+        }
+        registry.validate()?;
+        Ok(registry)
+    }
+
+    /// Recovers a valid temporary snapshot only when the primary is absent.
+    pub fn recover(path: &Path) -> Result<Self> {
+        match Self::load(path) {
+            Ok(registry) => Ok(registry),
+            Err(Error::Persistence(error)) if error.kind() == std::io::ErrorKind::NotFound => {
+                let temporary = path.with_extension("tmp");
+                let registry = Self::load(&temporary)?;
+                fs::rename(temporary, path)?;
+                Ok(registry)
+            }
+            Err(error) => Err(error),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -360,5 +468,54 @@ mod tests {
         let mut changed = item;
         changed.subject_digest = digest_with('d');
         assert_ne!(first, changed.digest().expect("valid manifest"));
+    }
+
+    #[test]
+    fn registry_round_trip_rejects_tampering_and_recovers_valid_temp() {
+        let item = manifest();
+        let subject = item.subject_digest.clone();
+        let mut registry = ArtifactRegistry::default();
+        registry
+            .quarantine(item, "operator", "validator")
+            .expect("quarantine");
+        registry
+            .accept("artifact-1", &subject, "reviewer", 12)
+            .expect("accept");
+
+        let directory = tempfile::tempdir().expect("directory");
+        let path = directory.path().join("artifacts.json");
+        registry.save(&path).expect("save");
+        assert_eq!(ArtifactRegistry::load(&path).expect("load"), registry);
+
+        let mut bytes = std::fs::read(&path).expect("read");
+        let tamper_index = bytes.len() - 2;
+        bytes[tamper_index] = b' ';
+        std::fs::write(&path, bytes).expect("tamper");
+        assert!(ArtifactRegistry::load(&path).is_err());
+
+        std::fs::write(
+            path.with_extension("tmp"),
+            crate::canonical_bytes(&registry).expect("canonical"),
+        )
+        .expect("temporary snapshot");
+        std::fs::remove_file(&path).expect("remove primary");
+        assert_eq!(ArtifactRegistry::recover(&path).expect("recover"), registry);
+        assert_eq!(
+            ArtifactRegistry::load(&path).expect("recovered load"),
+            registry
+        );
+    }
+
+    #[test]
+    fn persisted_lifecycle_inconsistency_is_rejected() {
+        let item = manifest();
+        let mut registry = ArtifactRegistry::default();
+        registry
+            .quarantine(item, "operator", "validator")
+            .expect("quarantine");
+        let mut record = registry.records.remove("artifact-1").expect("record");
+        record.status = ArtifactStatus::Accepted;
+        registry.records.insert("artifact-1".into(), record);
+        assert!(registry.validate().is_err());
     }
 }

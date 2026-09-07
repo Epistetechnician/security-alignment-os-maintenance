@@ -46,7 +46,7 @@ JavaScript runtime dependencies are installed.
 | `Kernel`, `ReplayJournal` | Exact issuer/candidate/policy binding, claim expiry, budgets, single-use execution, and atomic journal persistence |
 | `checker` | Independent local recomputation of replay, audit, and fixed-receipt invariants |
 | `EvidenceRegistry` | Subject-bound evidence, distinct local review roles, freshness, and revocation |
-| `artifacts` | Quarantined artifact manifests with subject/source/provenance digests, retention, review, and revocation |
+| `artifacts` | Quarantined artifact manifests with subject/source/provenance digests, retention, review, revocation, and canonical persistence/recovery |
 | `contract` | Explicit capability lattice, lifecycle transitions, and caller-owned failure budgets |
 | `property` | Exhaustive local lattice/lifecycle checks and digest-only invariant reports |
 | `receipts` | Ed25519-signed capability receipts with exact decision binding and local replay rejection |

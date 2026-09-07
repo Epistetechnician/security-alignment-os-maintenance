@@ -28,13 +28,19 @@ interval, the exact subject digest, and all three distinct role assertions.
 Duplicate artifact identifiers, repeated acceptance, repeated revocation, and
 subject mismatches fail closed.
 
+`ArtifactRegistry::validate` rechecks every persisted lifecycle record,
+including status/timestamp consistency and role separation. `save` writes a
+canonical JSON snapshot through a temporary path; `load` rejects non-canonical
+or invalid bytes; `recover` promotes a valid temporary snapshot only when the
+primary path is absent. The path and filesystem remain caller-owned.
+
 This is local pure-data evidence only. Role strings are caller assertions; the
 module does not authenticate identities, provide signatures, verify a custody
 filesystem, prove license ownership, enforce retention deletion, inspect
 artifact bytes, or establish an external or scientific claim. No provider,
 model, network, settlement, or production execution is involved.
 
-Focused validation after registering the module from `src/lib.rs`:
+Focused validation:
 
 ```text
 cargo fmt --all -- --check

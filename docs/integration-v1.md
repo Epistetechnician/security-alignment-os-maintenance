@@ -39,6 +39,12 @@ chain and canonical bytes on load, supports temporary-snapshot recovery when
 the primary is absent, and uses atomic replacement for a selected destination.
 It does not provide authenticated authorship or cross-process append locking.
 
+`artifacts::ArtifactRegistry` has the same canonical persistence boundary for
+manifest lifecycle records. `validate` rejects inconsistent status,
+timestamp, role, and manifest bindings before `save` or after `load`;
+`recover` promotes only a valid temporary snapshot when the primary is absent.
+This is persistence validation, not proof of external custody or deletion.
+
 `checker` independently recomputes replay, audit and fixed-receipt invariants
 for local regression. Its result is not independent acceptance evidence.
 

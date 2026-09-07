@@ -35,8 +35,9 @@ Malformed or later-mutated policy state is rejected before admission or
 consumption. Candidate payloads remain caller-owned and may be mutable. A mutation after
 admission changes the candidate digest and invalidates the issued decision.
 Issued token budgets and policy ceilings are snapshotted into immutable
-mappings. Budget checks are performed before broker state changes, including
-for rejected over-budget and malformed uses. Zero-cost use is still single-use.
+mappings. Budget checks require every policy-declared cost axis, reject unknown
+axes, and run before broker state changes, including for rejected incomplete,
+over-budget, and malformed uses. Zero-cost use is still single-use.
 The replay journal binds a digest of `(agent_id, nonce)` in addition to the
 candidate digest, so a nonce cannot be reused by the same agent under a changed
 candidate.

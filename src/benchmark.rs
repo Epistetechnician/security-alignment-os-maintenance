@@ -51,9 +51,13 @@ fn case(
             ]
             .into_iter()
             .collect(),
-            resource_cost: [("cpu_ms".into(), if over_budget { 1_001 } else { 1 })]
-                .into_iter()
-                .collect(),
+            resource_cost: [
+                ("cpu_ms".into(), if over_budget { 1_001 } else { 1 }),
+                ("bytes".into(), 1),
+                ("spend".into(), 0),
+            ]
+            .into_iter()
+            .collect(),
             source_digest: if malformed_source {
                 "tampered".into()
             } else {

@@ -668,17 +668,27 @@ impl Kernel {
                 None,
             );
         }
-        if proposal.resource_cost.iter().any(|(axis, amount)| {
+        let incomplete_budget = self
+            .policy
+            .max_cost
+            .keys()
+            .any(|axis| !proposal.resource_cost.contains_key(axis));
+        let over_budget = proposal.resource_cost.iter().any(|(axis, amount)| {
             self.policy
                 .max_cost
                 .get(axis)
                 .map(|limit| amount > limit)
                 .unwrap_or(true)
-        }) {
+        });
+        if incomplete_budget || over_budget {
             return self.record(
                 proposal,
                 DecisionKind::Rejected,
-                "resource budget exceeded",
+                if incomplete_budget {
+                    "resource budget is incomplete"
+                } else {
+                    "resource budget exceeded"
+                },
                 None,
             );
         }
@@ -1605,6 +1615,21 @@ mod tests {
             assert_eq!(decision.kind, DecisionKind::Rejected);
             assert!(decision.capability.is_none());
         }
+    }
+
+    #[test]
+    fn missing_resource_axis_is_rejected_without_authority() {
+        let mut kernel = Kernel::new(Policy::default()).unwrap();
+        let mut proposal = proposal("missing-resource-axis");
+        proposal.resource_cost.remove("bytes");
+
+        let decision = kernel.admit(&proposal, 10).unwrap();
+        assert_eq!(decision.kind, DecisionKind::Rejected);
+        assert!(decision.capability.is_none());
+        assert_eq!(
+            kernel.lifecycle_state(&proposal.digest().unwrap()),
+            Some(contract::LifecycleState::Rejected)
+        );
     }
 
     #[test]

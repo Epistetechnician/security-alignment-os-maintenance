@@ -50,6 +50,26 @@ pub struct ReceiptBinding<'a> {
     pub subject: &'a str,
 }
 
+fn observe_failure(
+    kernel: &mut Kernel,
+    runtime: &mut Runtime,
+    kind: contract::FailureKind,
+) -> Result<contract::BudgetDecision> {
+    match kernel.observe_failure(kind) {
+        Ok(decision) => {
+            if decision == contract::BudgetDecision::FreezeRequired {
+                runtime.freeze("failure budget exhausted");
+            }
+            Ok(decision)
+        }
+        Err(error) => {
+            runtime.freeze("failure budget state invalid or exhausted");
+            kernel.freeze_all()?;
+            Err(error)
+        }
+    }
+}
+
 pub fn run(
     kernel: &mut Kernel,
     runtime: &mut Runtime,
@@ -61,11 +81,7 @@ pub fn run(
     let subject_digest = proposal.digest()?;
     let observation_digest = digest(&observation)?;
     if !evidence.is_valid(evidence_id, observation.at, &subject_digest) {
-        if kernel.observe_failure(contract::FailureKind::Quarantine)?
-            == contract::BudgetDecision::FreezeRequired
-        {
-            runtime.freeze("failure budget exhausted");
-        }
+        observe_failure(kernel, runtime, contract::FailureKind::Quarantine)?;
         return Ok(WorkflowResult {
             disposition: Disposition::Quarantined,
             subject_digest,
@@ -75,11 +91,7 @@ pub fn run(
     }
     let decision = kernel.admit(proposal, observation.at)?;
     if decision.kind != DecisionKind::Accepted {
-        if kernel.observe_failure(contract::FailureKind::Rejection)?
-            == contract::BudgetDecision::FreezeRequired
-        {
-            runtime.freeze("failure budget exhausted");
-        }
+        observe_failure(kernel, runtime, contract::FailureKind::Rejection)?;
         return Ok(WorkflowResult {
             disposition: Disposition::Rejected,
             subject_digest,
@@ -113,7 +125,7 @@ fn complete_admitted(
         if rolled_back {
             kernel.rollback(proposal)?;
         }
-        let budget_decision = kernel.observe_failure(contract::FailureKind::Rollback)?;
+        let budget_decision = observe_failure(kernel, runtime, contract::FailureKind::Rollback)?;
         if observation.kill_requested {
             runtime.kill("kill observation");
             kernel.kill(proposal)?;
@@ -159,11 +171,7 @@ pub fn run_with_receipt(
     let subject_digest = proposal.digest()?;
     let observation_digest = digest(&observation)?;
     if !evidence.is_valid(evidence_id, observation.at, &subject_digest) {
-        if kernel.observe_failure(contract::FailureKind::Quarantine)?
-            == contract::BudgetDecision::FreezeRequired
-        {
-            runtime.freeze("failure budget exhausted");
-        }
+        observe_failure(kernel, runtime, contract::FailureKind::Quarantine)?;
         return Ok(WorkflowResult {
             disposition: Disposition::Quarantined,
             subject_digest,
@@ -173,11 +181,7 @@ pub fn run_with_receipt(
     }
     let decision = kernel.admit(proposal, observation.at)?;
     if decision.kind != DecisionKind::Accepted {
-        if kernel.observe_failure(contract::FailureKind::Rejection)?
-            == contract::BudgetDecision::FreezeRequired
-        {
-            runtime.freeze("failure budget exhausted");
-        }
+        observe_failure(kernel, runtime, contract::FailureKind::Rejection)?;
         return Ok(WorkflowResult {
             disposition: Disposition::Rejected,
             subject_digest,
@@ -198,11 +202,7 @@ pub fn run_with_receipt(
         .is_err()
     {
         kernel.quarantine(proposal)?;
-        if kernel.observe_failure(contract::FailureKind::Quarantine)?
-            == contract::BudgetDecision::FreezeRequired
-        {
-            runtime.freeze("failure budget exhausted");
-        }
+        observe_failure(kernel, runtime, contract::FailureKind::Quarantine)?;
         return Ok(WorkflowResult {
             disposition: Disposition::Quarantined,
             subject_digest,
@@ -398,5 +398,40 @@ mod tests {
             kernel.lifecycle_state(&proposal.digest().expect("subject")),
             Some(crate::contract::LifecycleState::Quarantined)
         );
+    }
+
+    #[test]
+    fn exhausted_failure_budget_freezes_runtime_before_returning_error() {
+        let mut kernel = Kernel::new(Policy::default()).expect("kernel");
+        kernel
+            .configure_failure_budget(crate::contract::FailureBudget {
+                max_rejections: 10,
+                max_quarantines: 1,
+                max_rollbacks: 10,
+                max_consecutive_failures: 10,
+                max_window_failures: 10,
+                window_size: 10,
+            })
+            .expect("budget");
+        kernel
+            .observe_failure(crate::contract::FailureKind::Quarantine)
+            .expect("first failure");
+        let mut runtime = Runtime::default();
+        let error = run(
+            &mut kernel,
+            &mut runtime,
+            &EvidenceRegistry::default(),
+            "missing",
+            &proposal(),
+            Observation {
+                at: 10,
+                healthy: true,
+                telemetry_present: true,
+                kill_requested: false,
+            },
+        );
+        assert!(error.is_err());
+        assert!(runtime.is_frozen());
+        assert!(kernel.is_frozen());
     }
 }

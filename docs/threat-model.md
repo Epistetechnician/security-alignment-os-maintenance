@@ -17,14 +17,14 @@ State slice: `security-alignment-os-foundation-v1`.
 
 | Threat | Control | Local test |
 |---|---|---|
-| Direct authority request | deterministic rejection | `test_rejection_cannot_mutate_state` |
-| Replay | journal candidate uniqueness and chain validation | `test_journal_detects_replay_and_validates_chain` |
-| Scope escalation | intent-bound token plus scope check | `test_accepted_write_requires_bound_scope` |
+| Direct authority request | deterministic rejection | `rejection_and_evidence_gates_are_fail_closed` |
+| Replay | journal candidate uniqueness and chain validation | `end_to_end_completion_and_replay` |
+| Scope escalation | intent-bound token plus scope check | `malformed_write_is_rejected_before_capability_consumption` |
 | Missing provenance | quarantine | adversarial benchmark |
 | Budget overrun | exact integer policy ceiling | adversarial benchmark |
-| Self-approval | reviewer/operator separation | `test_evidence_requires_independent_reviewer` |
-| Unaccepted evidence | Statebook freeze | `test_statebook_freezes_without_accepted_evidence` |
-| Runtime persistence | independent kill switch | runtime API |
+| Self-approval | reviewer/operator/validator separation | evidence registry regression tests |
+| Unaccepted evidence | integration quarantine | `rejection_and_evidence_gates_are_fail_closed` |
+| Continued local execution | terminal freeze/kill flags outside proposal data | runtime regression tests |
 
 ## Not established
 
@@ -33,3 +33,12 @@ TEE vendor, malicious dependency, side-channel attack, cryptographic key loss,
 deceptive optimization, semantic misalignment, robust corrigibility, or
 production deployment. Those require separate threat models and independent
 evidence.
+
+## Trust assumptions added by integration
+
+The host, Rust process, role assertions, clock and observation producer are
+trusted. Neither a digest nor a different role string authenticates a reviewer.
+One kernel owns process-local execution consumption; a new kernel is a new
+authority domain. Stored journals never restore executable capabilities.
+Caller-owned canonical JSON memory has logical consent controls and digest checks,
+not encryption, secure erasure or hostile-host protection.

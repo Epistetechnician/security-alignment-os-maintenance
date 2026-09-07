@@ -39,3 +39,12 @@ Require external red-team replication, supply-chain review, attested runtime
 identity where available, incident exercises, capability-by-capability release
 gates, and reproducible public claim packets. Production authority remains
 closed until those gates are independently satisfied.
+
+## Local implementation status after parallel build
+
+The local kernel, canonical journal persistence, evidence lifecycle, measurement
+locks, dictionary rollback, specialist consent/retrieval, ordinary fixed-job
+receipts and release-state contracts are implemented. External enforcement,
+scientific assessment, training and deployment remain the gates above. Public
+fixture split names are organizational labels, not independent held-out data.
+See [integration-v1.md](integration-v1.md) for the exact remaining boundaries.

@@ -2,54 +2,83 @@
 
 State slice: `security-alignment-os-foundation-v1`.
 
-A local reference implementation for the security/alignment control loop:
+A runnable Rust-native local reference implementation of the HSAI
+proposal-to-rollback control loop. It integrates evidence review records,
+admission, single-use capabilities, consented specialist memory, local
+execution, monitoring, rollback, fixed receipts, governance, and audit
+persistence. It does not run a model or establish scientific alignment, OS
+isolation, authenticated independent review or production readiness.
 
 ```text
-untrusted proposal
-  -> typed semantic case
+consented tenant note + immutable specialist identity
+  -> typed action proposal
+  -> exact-subject evidence review record
   -> deterministic admission
-  -> capability token
-  -> bounded execution
-  -> digest-chained audit
-  -> independent evidence review
-  -> held-out alignment measurement contract
+  -> kernel-bound single-use capability
+  -> reversible dictionary execution
+  -> evidence/lease/telemetry observation
+  -> completion or rollback + freeze/shutdown
 ```
-
-The central security claim is narrow: rejected proposals do not mutate governed
-state, accepted proposals receive only the authority explicitly granted by the
-policy, and every admission decision is recorded in a replayable digest chain.
-This is local regression evidence, not proof of model safety, alignment,
-corrigibility, production readiness, or full security.
-
-All implementation is clean-room. No code, artifacts, datasets, traces, or
-generated outputs are ported from another local or remote repository. Public
-SOTA specifications may inform independent reimplementation only when license
-and provenance are recorded. See [clean-room policy](docs/clean-room-policy.md).
-
-## Components
-
-- `alignment_os.models`: canonical typed contracts and claim composition.
-- `alignment_os.admission`: deterministic accept/reject/quarantine kernel.
-- `alignment_os.capabilities`: short-lived, intent-bound authority tokens.
-- `alignment_os.journal`: append-only admission history and replay checks.
-- `alignment_os.evidence`: digest-bound evidence proposals and independent review.
-- `alignment_os.benchmark`: deterministic semantic cases and adversarial mutations.
-- `alignment_os.statebook`: exact-integer risk and release decisions; no value moves.
-- `alignment_os.alignment`: prediction-lock and causal-measurement contracts only.
-- `alignment_os.runtime`: bounded local state mutation and independent kill switch.
 
 ## Run
 
+Rust 1.77+.
+
 ```sh
-python3 -m unittest discover -s tests -v
-python3 -m compileall -q alignment_os tests
-python3 -m alignment_os.demo
+cargo test --all-targets
+cargo clippy --all-targets -- -D warnings
+cargo run --bin local_demo
+pnpm run lint
 ```
 
-## Next authorized research boundaries
+The Rust test suite exercises completion, rollback, specialist consent, local
+audit persistence, and one fixed integer-sum receipt. It makes no provider
+calls or settlement transactions.
 
-The current project deliberately stops before model execution. A future slice
-may add a separately reviewed Astral causal-feature measurement runner, external
-custody, independent validation, and a positive execution budget. It must not
-import closed negative scientific artifacts or treat this reference system as
-evidence that an agent is aligned.
+The heavy gate is `pnpm run lint`. Faster gates are `lint:fast`, `test:focused`,
+`verify:contracts` and `verify:full`. `pnpm` only dispatches Cargo checks; no
+JavaScript runtime dependencies are installed.
+
+## Components
+
+| Module | Implemented behavior |
+| --- | --- |
+| `Kernel`, `ReplayJournal` | Exact issuer/candidate/policy binding, claim expiry, budgets, single-use execution, and atomic journal persistence |
+| `checker` | Independent local recomputation of replay, audit, and fixed-receipt invariants |
+| `EvidenceRegistry` | Subject-bound evidence, distinct local review roles, freshness, and revocation |
+| `Runtime`, `AuditJournal` | Reversible dictionary actions, terminal freeze/kill, and digest-chained audit persistence |
+| `specialist`, `memory` | Immutable identities, revocation, tenant consent, retrieval, redacted telemetry, and canonical durable memory |
+| `integration` | Evidence-bound workflow execution, observation, rollback, and freeze disposition |
+| `market` | Fixed local sum, result recomputation, binding/timeout checks, and unexecuted settlement proposal |
+| `governance` | Shadow/canary/local-release records with immutable base and phase evidence |
+
+## Boundaries
+
+Callers own policy, clock, identity assertions, storage paths and observations.
+Same-process Rust objects are not a sandbox against malicious code.
+Kernel issuance is process-local; journal persistence is audit persistence,
+not distributed authority or cross-process replay protection. Persisted content
+is plaintext in caller-owned storage; digests detect accidental or
+uncoordinated tampering, not an attacker able to rewrite both content and
+digest. Consent revocation blocks access; it does not claim secure disk erasure.
+
+The remaining production gates include authenticated reviewers, real sandbox
+and egress enforcement, secret custody, model serving/training, held-out
+scientific evaluation, external red-team replication, deployment and settlement.
+The local tests do not satisfy those gates.
+
+## Build records
+
+- [Frozen contract](docs/build-contract-v1.md)
+- [Integration and remaining gates](docs/integration-v1.md)
+- [Kernel](docs/kernel-v1.md)
+- [Evidence and evaluation](docs/evidence-evaluation-v1.md)
+- [Runtime and specialist](docs/runtime-v1.md)
+- [Rust port status](docs/rust-port-v1.md)
+- [Source intake](docs/source-intake-v1.json)
+- [Reuse policy](docs/clean-room-policy.md)
+
+The Rust implementation extends this repository directly and uses the HSAI
+840–842 plan plus eligible local/public references recorded in the intake
+manifest. No closed research artifacts, scientific corpora, traces or model
+outputs were imported.

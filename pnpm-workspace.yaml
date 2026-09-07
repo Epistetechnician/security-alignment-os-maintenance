@@ -1,0 +1,4 @@
+# State slice: security-alignment-os-foundation-v1.
+# Bound script discovery to this repository, independent of ancestor workspaces.
+packages:
+  - '.'

@@ -1,0 +1,71 @@
+{
+  "state_slice": "security-alignment-os-foundation-v1",
+  "local_sources": [
+    {
+      "repository": "composed-zk-benchmark-os",
+      "path": "docs/research/agent-platform/840-proof-carrying-capability-bounded-agent-platform-v1.md",
+      "head": "83328de2895db6d8a154bd80eefefdd9ffb77652",
+      "working_bytes_sha256": "fdfbd9d81e38f5a2f113b8fb348d3839479411423790a7beaa57a7ed37b434b2",
+      "license_status": "No root license located; no source copied",
+      "treatment": "Architecture and API reference; no code or scientific artifacts copied"
+    },
+    {
+      "repository": "composed-zk-benchmark-os",
+      "path": "docs/research/agent-platform/841-parallel-build-plan-v1.md",
+      "head": "83328de2895db6d8a154bd80eefefdd9ffb77652",
+      "working_bytes_sha256": "a8a7c1a337e48a4b368ac38be75e3475189675e50a67367f638cab45dfd8f2c0",
+      "license_status": "No root license located; no source copied",
+      "treatment": "Architecture and API reference; no code or scientific artifacts copied"
+    },
+    {
+      "repository": "composed-zk-benchmark-os",
+      "path": "docs/research/agent-platform/842-sota-build-guidance-v1.md",
+      "head": "83328de2895db6d8a154bd80eefefdd9ffb77652",
+      "working_bytes_sha256": "1d19211bc34d487cc32e1f56c7f1f85984dcf87daaaafd4f9119f400258b39a3",
+      "license_status": "No root license located; no source copied",
+      "treatment": "Architecture and API reference; no code or scientific artifacts copied"
+    },
+    {
+      "repository": "composed-zk-benchmark-os",
+      "path": "crates/hsai-control-plane/src/lib.rs",
+      "head": "83328de2895db6d8a154bd80eefefdd9ffb77652",
+      "working_bytes_sha256": "cdde283d56d2f34f420e31330a02d32e958a7590e4d80be6b7e9d2e227cc2dba",
+      "license_status": "No root license located; no source copied",
+      "treatment": "Architecture and API reference; no code or scientific artifacts copied"
+    },
+    {
+      "repository": "composed-platform",
+      "path": "src/hosted_runtime.rs",
+      "head": "d550e70b0438f524142a446f77e87b126d68c3ae",
+      "working_bytes_sha256": "9ad439479e7b83175557d801a6d5267bc2c160d2aacd46b35bc919365427c096",
+      "license_status": "MIT",
+      "treatment": "Architecture and API reference; no code or scientific artifacts copied"
+    },
+    {
+      "repository": "composed-platform",
+      "path": "LICENSE",
+      "head": "d550e70b0438f524142a446f77e87b126d68c3ae",
+      "working_bytes_sha256": "1b053d549efd2483bd06a8687ebf6bfa80dd10e430e1b34caf062b9c3c288dff",
+      "license_status": "MIT",
+      "treatment": "Architecture and API reference; no code or scientific artifacts copied"
+    }
+  ],
+  "external_references": [
+    {
+      "url": "https://modelcontextprotocol.io/specification/2025-11-25/server/tools",
+      "version": "2025-11-25",
+      "treatment": "Tool identity and list-change design reference; no SDK/code imported"
+    },
+    {
+      "url": "https://in-toto.io/Statement/v1",
+      "version": "Statement v1",
+      "treatment": "Subject digest design reference; no code imported"
+    },
+    {
+      "url": "https://gvisor.dev/docs/architecture_guide/intro/",
+      "version": "reviewed 2026-09-07, not dependency-pinned",
+      "treatment": "External isolation boundary reference; no runtime installed"
+    }
+  ],
+  "claim_ceiling": "local implementation provenance only"
+}

@@ -1083,7 +1083,7 @@ impl Runtime {
         self.audit.push(
             [
                 ("event".into(), "freeze".into()),
-                ("reason".into(), reason.into()),
+                ("reason_digest".into(), digest_bytes(reason.as_bytes())),
             ]
             .into_iter()
             .collect(),
@@ -1098,7 +1098,7 @@ impl Runtime {
         self.audit.push(
             [
                 ("event".into(), "kill".into()),
-                ("reason".into(), reason.into()),
+                ("reason_digest".into(), digest_bytes(reason.as_bytes())),
             ]
             .into_iter()
             .collect(),
@@ -1115,7 +1115,7 @@ impl Runtime {
         self.audit.push(
             [
                 ("event".into(), "rollback".into()),
-                ("reason".into(), reason.into()),
+                ("reason_digest".into(), digest_bytes(reason.as_bytes())),
             ]
             .into_iter()
             .collect(),
@@ -1708,7 +1708,13 @@ mod tests {
     #[test]
     fn terminal_controls_do_not_append_duplicate_shutdown_events() {
         let mut runtime = Runtime::default();
-        runtime.freeze("first freeze");
+        runtime.freeze("private first freeze reason");
+        let freeze_audit = runtime.audit.first().expect("freeze audit");
+        assert!(!freeze_audit.contains_key("reason"));
+        assert_eq!(
+            freeze_audit.get("reason_digest"),
+            Some(&digest_bytes("private first freeze reason".as_bytes()))
+        );
         let frozen_audit_len = runtime.audit.len();
         runtime.freeze("second freeze");
         assert_eq!(runtime.audit.len(), frozen_audit_len);

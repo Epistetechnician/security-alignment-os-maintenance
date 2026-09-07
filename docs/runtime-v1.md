@@ -10,6 +10,7 @@ checkpoint. `rollback` restores the latest checkpoint while retaining consumed
 authority. `freeze` stops execution and rollback; `kill` also marks the runtime
 killed. Repeated freeze/kill calls do not append duplicate shutdown events.
 Audit records contain operation metadata and state digests, not values.
+Shutdown and rollback reasons are retained only as digests, never as raw text.
 `RuntimeSnapshot` persists state, checkpoints, shutdown flags, and audit records
 as canonical JSON; `recover_snapshot` promotes a validated temporary snapshot
 only when the primary is absent.

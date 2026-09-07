@@ -12,6 +12,8 @@ killed. Audit records contain operation metadata and state digests, not values.
 
 `SpecialistRegistry` serves immutable `SpecialistIdentity` records and refuses
 identity drift. Revocation is explicit and permanent for a registered ID.
+Identity snapshots validate key bindings and use canonical save/load/recovery;
+the role and identity fields remain caller assertions.
 `TenantRetrieval` stores local records under `(tenant, resource)` and requires a
 registered, non-revoked specialist plus an active, resource-scoped
 `ConsentGrant`. `memory::PersistentMemory` adds canonical caller-owned file

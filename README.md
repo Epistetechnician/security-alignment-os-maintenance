@@ -55,7 +55,7 @@ JavaScript runtime dependencies are installed.
 | `execution_gate` | Typed sandbox/request boundary that validates controls and remains blocked locally |
 | `schema` | Versioned schema identities with exact digest-bound lookup |
 | `Runtime`, `AuditJournal` | Reversible dictionary actions, terminal freeze/kill, and digest-chained audit persistence |
-| `specialist`, `memory` | Immutable identities, consented retrieval, revocation, redacted telemetry, frozen tool manifests, and canonical durable memory |
+| `specialist`, `memory` | Immutable specialist identities, consented retrieval, revocation, redacted telemetry, frozen tool manifests, and canonical durable memory/registry snapshots |
 | `integration` | Evidence-bound workflow execution, receipt-gated execution, observation, rollback, and freeze disposition |
 | `market` | Fixed local sum, result recomputation, binding/timeout/replay checks, and unexecuted settlement proposal |
 | `governance` | Shadow/canary/local-release records with immutable base, phase evidence, lifecycle validation, and canonical persistence/recovery |

@@ -81,7 +81,9 @@ does not deploy an adapter or authorize an external executor. Registry
 snapshots validate candidate identity, phase evidence cardinality, and
 canonical bytes before save/load/recovery.
 
-`specialist::ToolRegistry` binds tool ID/version, implementation digest and a
+`specialist::SpecialistRegistry` and `specialist::ToolRegistry` bind immutable
+identity snapshots with canonical persistence/recovery. The tool registry
+binds tool ID/version, implementation digest and a
 canonical manifest-list digest, supports exact invocable lookup, terminal
 revocation, and canonical persistence. `adapters::AdapterPlan` validates the
 shape of an external sandbox/invocation request but rejects external execution

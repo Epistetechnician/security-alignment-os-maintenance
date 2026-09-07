@@ -22,6 +22,11 @@ impl SpecialistIdentity {
     pub fn validate(&self) -> Result<()> {
         if self.specialist_id.is_empty()
             || self.version.is_empty()
+            || self
+                .specialist_id
+                .chars()
+                .any(|character| character.is_control())
+            || self.version.chars().any(|character| character.is_control())
             || !valid_digest(&self.code_digest)
             || !valid_digest(&self.policy_digest)
         {
@@ -35,13 +40,32 @@ impl SpecialistIdentity {
     }
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 pub struct SpecialistRegistry {
     identities: BTreeMap<String, SpecialistIdentity>,
     revoked: BTreeSet<String>,
 }
 
 impl SpecialistRegistry {
+    pub fn validate(&self) -> Result<()> {
+        if self
+            .revoked
+            .iter()
+            .any(|specialist_id| !self.identities.contains_key(specialist_id))
+        {
+            return Err(Error::Invalid(
+                "revoked specialist is not registered".into(),
+            ));
+        }
+        for (specialist_id, identity) in &self.identities {
+            if specialist_id != &identity.specialist_id {
+                return Err(Error::Invalid("specialist registry key mismatch".into()));
+            }
+            identity.validate()?;
+        }
+        Ok(())
+    }
+
     pub fn register(&mut self, identity: SpecialistIdentity) -> Result<()> {
         identity.validate()?;
         if self.revoked.contains(&identity.specialist_id) {
@@ -56,20 +80,55 @@ impl SpecialistRegistry {
         }
         self.identities
             .insert(identity.specialist_id.clone(), identity);
+        self.validate()?;
         Ok(())
     }
     pub fn revoke(&mut self, specialist_id: &str) -> Result<()> {
-        if self.identities.contains_key(specialist_id) {
-            self.revoked.insert(specialist_id.into());
-            Ok(())
-        } else {
-            Err(Error::Invalid("unknown specialist".into()))
+        if !self.identities.contains_key(specialist_id) {
+            return Err(Error::Invalid("unknown specialist".into()));
         }
+        if !self.revoked.insert(specialist_id.into()) {
+            return Err(Error::Rejected("specialist is already revoked".into()));
+        }
+        Ok(())
     }
     pub fn resolve(&self, specialist_id: &str, now: u64) -> Option<&SpecialistIdentity> {
         self.identities
             .get(specialist_id)
             .filter(|identity| !self.revoked.contains(specialist_id) && identity.issued_at <= now)
+    }
+
+    pub fn save(&self, path: &Path) -> Result<()> {
+        self.validate()?;
+        let temporary = path.with_extension("tmp");
+        fs::write(&temporary, canonical_bytes(self)?)?;
+        fs::rename(temporary, path)?;
+        Ok(())
+    }
+
+    pub fn load(path: &Path) -> Result<Self> {
+        let bytes = fs::read(path)?;
+        let registry: Self = serde_json::from_slice(&bytes)?;
+        if canonical_bytes(&registry)? != bytes {
+            return Err(Error::Journal(
+                "specialist registry bytes are not canonical JSON".into(),
+            ));
+        }
+        registry.validate()?;
+        Ok(registry)
+    }
+
+    pub fn recover(path: &Path) -> Result<Self> {
+        match Self::load(path) {
+            Ok(registry) => Ok(registry),
+            Err(Error::Persistence(error)) if error.kind() == std::io::ErrorKind::NotFound => {
+                let temporary = path.with_extension("tmp");
+                let registry = Self::load(&temporary)?;
+                fs::rename(temporary, path)?;
+                Ok(registry)
+            }
+            Err(error) => Err(error),
+        }
     }
 }
 
@@ -488,5 +547,57 @@ mod tool_registry_tests {
         .expect("temporary snapshot");
         std::fs::remove_file(&path).expect("remove primary");
         assert_eq!(ToolRegistry::recover(&path).expect("recover"), registry);
+    }
+}
+
+#[cfg(test)]
+mod specialist_registry_tests {
+    use super::*;
+
+    fn identity() -> SpecialistIdentity {
+        SpecialistIdentity {
+            specialist_id: "specialist-1".into(),
+            version: "1.0.0".into(),
+            code_digest: "a".repeat(64),
+            policy_digest: "b".repeat(64),
+            issued_at: 10,
+        }
+    }
+
+    #[test]
+    fn identity_registry_is_immutable_and_revocation_is_terminal() {
+        let item = identity();
+        let mut registry = SpecialistRegistry::default();
+        registry.register(item.clone()).expect("register");
+        assert_eq!(registry.resolve("specialist-1", 10), Some(&item));
+        registry.revoke("specialist-1").expect("revoke");
+        assert!(registry.resolve("specialist-1", 10).is_none());
+        assert!(registry.revoke("specialist-1").is_err());
+        assert!(registry.register(item).is_err());
+    }
+
+    #[test]
+    fn specialist_registry_snapshot_is_canonical_and_recoverable() {
+        let mut registry = SpecialistRegistry::default();
+        registry.register(identity()).expect("register");
+        let directory = tempfile::tempdir().expect("directory");
+        let path = directory.path().join("specialists.json");
+        registry.save(&path).expect("save");
+        assert_eq!(SpecialistRegistry::load(&path).expect("load"), registry);
+        let mut bytes = std::fs::read(&path).expect("read");
+        let tamper_index = bytes.len() - 2;
+        bytes[tamper_index] = b' ';
+        std::fs::write(&path, bytes).expect("tamper");
+        assert!(SpecialistRegistry::load(&path).is_err());
+        std::fs::write(
+            path.with_extension("tmp"),
+            crate::canonical_bytes(&registry).expect("canonical"),
+        )
+        .expect("temporary snapshot");
+        std::fs::remove_file(&path).expect("remove primary");
+        assert_eq!(
+            SpecialistRegistry::recover(&path).expect("recover"),
+            registry
+        );
     }
 }

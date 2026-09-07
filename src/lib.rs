@@ -820,10 +820,20 @@ impl Kernel {
             self.lifecycles.insert(key, next_lifecycle);
             return Ok(false);
         }
+        let expected_decision_digest = digest(&(
+            proposal.candidate_id.clone(),
+            decision.kind,
+            decision.reason.clone(),
+            key.clone(),
+            decision.policy_digest.clone(),
+            decision.capability.clone(),
+        ))?;
         if issuance.consumed
             || decision.kind != DecisionKind::Accepted
+            || decision.candidate_id != proposal.candidate_id
             || decision.candidate_digest != issuance.candidate_digest
             || decision.decision_digest != issuance.decision_digest
+            || decision.decision_digest != expected_decision_digest
             || decision.policy_digest != issuance.policy_digest
             || decision.capability.as_ref() != Some(&issuance.capability)
             || now < issuance.capability.issued_at
@@ -991,6 +1001,7 @@ impl Runtime {
             .ok_or_else(|| Error::Rejected("accepted decision lacks capability".into()))?;
         if now < capability.issued_at
             || capability.expires_at <= now
+            || decision.candidate_id != proposal.candidate_id
             || capability.agent_id != proposal.agent_id
             || capability.action != proposal.action
             || capability.scope != proposal.scope
@@ -1459,6 +1470,30 @@ mod tests {
             .token_id = "f".repeat(64);
         assert!(runtime.execute(&mut kernel, &p, &tampered, 10).is_err());
         assert!(runtime.execute(&mut kernel, &p, &decision, 10).unwrap());
+    }
+
+    #[test]
+    fn decision_metadata_tampering_does_not_consume_original_issuance() {
+        let mut kernel = Kernel::new(Policy::default()).unwrap();
+        let mut runtime = Runtime::default();
+        let p = proposal("decision-metadata-tamper");
+        let decision = kernel.admit(&p, 10).unwrap();
+
+        let mut wrong_candidate = decision.clone();
+        wrong_candidate.candidate_id = "other-candidate".into();
+        assert!(runtime
+            .execute(&mut kernel, &p, &wrong_candidate, 10)
+            .is_err());
+
+        let mut wrong_reason = decision.clone();
+        wrong_reason.reason = "mutated reason".into();
+        assert!(runtime.execute(&mut kernel, &p, &wrong_reason, 10).is_err());
+
+        assert!(runtime.execute(&mut kernel, &p, &decision, 10).unwrap());
+        assert_eq!(
+            runtime.state.get("sandbox:key"),
+            Some(&Value::Number(1.into()))
+        );
     }
 
     #[test]

@@ -21,6 +21,10 @@ ReplayJournal::save(path) / load(path) / recover(path)
 An accepted decision is valid only when its private issuance record matches the
 full current candidate digest, complete capability token, complete decision
 digest, current policy digest, issuance window, and claim-bounded expiry.
+Consumption also recomputes the decision digest from the candidate identity,
+decision kind, reason, candidate digest, policy digest, and capability, and
+requires the transport `candidate_id` to equal the proposal. Mutating either
+decision metadata field therefore fails before the single-use reservation.
 Decision records are transport values; constructing one directly does not issue
 authority. `Kernel::consume` reserves the token once in the kernel, so
 runtime instances sharing a kernel cannot replay it. A runtime must call this

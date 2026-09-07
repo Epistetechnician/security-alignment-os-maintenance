@@ -244,6 +244,7 @@ pub fn validate_capability_receipt(
         || !valid_text(&capability.agent_id)
         || !valid_text(&capability.scope)
         || capability.issued_at >= capability.expires_at
+        || decision.candidate_id != proposal.candidate_id
         || decision.candidate_digest != proposal_digest
         || decision.policy_digest != policy_digest
         || decision.decision_digest != expected_decision_digest

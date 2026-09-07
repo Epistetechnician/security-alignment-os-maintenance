@@ -309,6 +309,7 @@ impl ReceiptSigner {
         let policy_digest = digest(policy)?;
         let capability_digest = digest(capability)?;
         if decision.candidate_digest != proposal_digest
+            || decision.candidate_id != proposal.candidate_id
             || decision.policy_digest != policy_digest
             || decision.decision_digest
                 != expected_decision_digest(proposal, decision, &policy_digest, capability)?
@@ -539,6 +540,7 @@ impl ReceiptVerifier {
         if decision.kind != DecisionKind::Accepted
             || decision.decision_digest
                 != expected_decision_digest(proposal, decision, &policy_digest, capability)?
+            || decision.candidate_id != proposal.candidate_id
             || receipt.proposal_digest != proposal_digest
             || receipt.candidate_digest != decision.candidate_digest
             || decision.candidate_digest != proposal_digest
@@ -686,6 +688,21 @@ mod tests {
         wrong_scope.capability.as_mut().expect("capability").scope = "sandbox".into();
         assert!(verifier
             .verify(&receipt, "tenant-1", &proposal, &wrong_scope, &policy, 100)
+            .is_err());
+        let mut wrong_candidate = decision.clone();
+        wrong_candidate.candidate_id = "candidate-2".into();
+        assert!(signer
+            .issue("tenant-1", &proposal, &wrong_candidate, &policy)
+            .is_err());
+        assert!(verifier
+            .verify(
+                &receipt,
+                "tenant-1",
+                &proposal,
+                &wrong_candidate,
+                &policy,
+                100
+            )
             .is_err());
         assert_eq!(verifier.verified_count(), 0);
     }

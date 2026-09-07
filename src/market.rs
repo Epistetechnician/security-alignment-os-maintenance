@@ -4,6 +4,11 @@
 
 use crate::{digest, valid_digest, Error, Result};
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeSet;
+use std::fs;
+use std::path::Path;
+
+const VERIFIER_FORMAT_VERSION: u8 = 1;
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct SumJob {
@@ -132,7 +137,75 @@ pub struct ReceiptVerifier {
     reserved: std::collections::BTreeSet<String>,
 }
 
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+struct VerifierDocument {
+    version: u8,
+    verified: BTreeSet<String>,
+    reserved: BTreeSet<String>,
+}
+
 impl ReceiptVerifier {
+    pub fn validate(&self) -> Result<()> {
+        if self
+            .verified
+            .iter()
+            .chain(&self.reserved)
+            .any(|value| !valid_digest(value))
+        {
+            return Err(Error::Invalid(
+                "market verifier state contains malformed digest".into(),
+            ));
+        }
+        Ok(())
+    }
+
+    fn document(&self) -> VerifierDocument {
+        VerifierDocument {
+            version: VERIFIER_FORMAT_VERSION,
+            verified: self.verified.clone(),
+            reserved: self.reserved.clone(),
+        }
+    }
+
+    pub fn save(&self, path: &Path) -> Result<()> {
+        self.validate()?;
+        let temporary = path.with_extension("tmp");
+        fs::write(&temporary, crate::canonical_bytes(&self.document())?)?;
+        fs::rename(temporary, path)?;
+        Ok(())
+    }
+
+    pub fn load(path: &Path) -> Result<Self> {
+        let bytes = fs::read(path)?;
+        let document: VerifierDocument = serde_json::from_slice(&bytes)?;
+        if document.version != VERIFIER_FORMAT_VERSION
+            || crate::canonical_bytes(&document)? != bytes
+        {
+            return Err(Error::Journal(
+                "market verifier bytes are not canonical JSON".into(),
+            ));
+        }
+        let verifier = Self {
+            verified: document.verified,
+            reserved: document.reserved,
+        };
+        verifier.validate()?;
+        Ok(verifier)
+    }
+
+    pub fn recover(path: &Path) -> Result<Self> {
+        match Self::load(path) {
+            Ok(verifier) => Ok(verifier),
+            Err(Error::Persistence(error)) if error.kind() == std::io::ErrorKind::NotFound => {
+                let temporary = path.with_extension("tmp");
+                let verifier = Self::load(&temporary)?;
+                fs::rename(temporary, path)?;
+                Ok(verifier)
+            }
+            Err(error) => Err(error),
+        }
+    }
+
     pub fn verify(&mut self, job: &SumJob, receipt: &SumReceipt, now: u64) -> Result<bool> {
         if job.validate().is_err() || receipt.validate(job, now).is_err() {
             return Ok(false);
@@ -146,7 +219,8 @@ impl ReceiptVerifier {
         now: u64,
     ) -> Result<serde_json::Value> {
         let receipt_digest = digest(receipt)?;
-        if now >= job.deadline
+        if receipt.validate(job, now).is_err()
+            || now >= job.deadline
             || !self.verified.contains(&receipt_digest)
             || !self.reserved.insert(job.digest()?)
         {

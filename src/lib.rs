@@ -1683,12 +1683,29 @@ mod tests {
         assert!(verifier.verify(&job, &receipt, 11).unwrap());
         assert!(!verifier.verify(&job, &receipt, 11).unwrap());
         checker::validate_receipt(&job, &receipt, 11).unwrap();
+        let wrong_job =
+            market::SumJob::new("other".into(), "requester".into(), vec![1, 2, 3], 100, 0).unwrap();
+        assert!(verifier
+            .propose_settlement(&wrong_job, &receipt, 12)
+            .is_err());
+        let directory = tempdir().unwrap();
+        let verifier_path = directory.path().join("market-verifier.json");
+        verifier.save(&verifier_path).unwrap();
+        let canonical = fs::read(&verifier_path).unwrap();
+        let mut tampered = canonical.clone();
+        let tamper_index = tampered.len() - 2;
+        tampered[tamper_index] = b' ';
+        fs::write(&verifier_path, tampered).unwrap();
+        assert!(market::ReceiptVerifier::load(&verifier_path).is_err());
+        fs::write(verifier_path.with_extension("tmp"), canonical).unwrap();
+        fs::remove_file(&verifier_path).unwrap();
+        let mut restored = market::ReceiptVerifier::recover(&verifier_path).unwrap();
         assert!(
-            !verifier.propose_settlement(&job, &receipt, 12).unwrap()["executed"]
+            !restored.propose_settlement(&job, &receipt, 12).unwrap()["executed"]
                 .as_bool()
                 .unwrap()
         );
-        assert!(verifier.propose_settlement(&job, &receipt, 12).is_err());
+        assert!(restored.propose_settlement(&job, &receipt, 12).is_err());
         let overflowing = market::SumJob::new(
             "overflow".into(),
             "requester".into(),

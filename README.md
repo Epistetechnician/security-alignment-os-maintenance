@@ -53,7 +53,7 @@ JavaScript runtime dependencies are installed.
 | `property` | Exhaustive local lattice/lifecycle checks and digest-only invariant reports |
 | `receipts` | Ed25519-signed capability receipts with exact decision binding and local replay rejection |
 | `execution_gate` | Typed sandbox/request boundary that validates controls and remains blocked locally |
-| `schema` | Versioned schema identities with exact digest-bound lookup |
+| `schema` | Versioned schema identities with exact digest-bound lookup and canonical recovery |
 | `Runtime`, `AuditJournal` | Reversible dictionary actions, terminal freeze/kill, and digest-chained audit persistence |
 | `specialist`, `memory` | Immutable specialist identities, consented retrieval, revocation, redacted telemetry, frozen tool manifests, and canonical durable memory/registry snapshots |
 | `integration` | Evidence-bound workflow execution, receipt-gated execution, observation, rollback, and freeze disposition |

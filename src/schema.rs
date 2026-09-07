@@ -6,12 +6,15 @@
 //! lowercase SHA-256 digests. It does not parse schemas, fetch definitions,
 //! or prove that a producer followed one.
 
-use crate::{valid_digest, Error, Result};
+use crate::{canonical_bytes, valid_digest, Error, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
+use std::fs;
+use std::path::Path;
 
 pub const STATE_SLICE: &str = "security-alignment-os-foundation-v1";
 const MAX_SCHEMA_ID_LEN: usize = 128;
+const FORMAT_VERSION: u8 = 1;
 
 fn valid_schema_id(value: &str) -> bool {
     !value.is_empty()
@@ -46,7 +49,23 @@ pub struct SchemaRegistry {
     records: BTreeMap<(String, u32), SchemaDescriptor>,
 }
 
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+struct SchemaDocument {
+    version: u8,
+    records: Vec<SchemaDescriptor>,
+}
+
 impl SchemaRegistry {
+    pub fn validate(&self) -> Result<()> {
+        for ((schema_id, version), descriptor) in &self.records {
+            if schema_id != &descriptor.schema_id || version != &descriptor.version {
+                return Err(Error::Invalid("schema registry key mismatch".into()));
+            }
+            descriptor.validate()?;
+        }
+        Ok(())
+    }
+
     pub fn register(&mut self, descriptor: SchemaDescriptor) -> Result<()> {
         descriptor.validate()?;
         let key = (descriptor.schema_id.clone(), descriptor.version);
@@ -54,6 +73,7 @@ impl SchemaRegistry {
             return Err(Error::Rejected("schema identity already registered".into()));
         }
         self.records.insert(key, descriptor);
+        self.validate()?;
         Ok(())
     }
 
@@ -86,6 +106,47 @@ impl SchemaRegistry {
 
     pub fn is_empty(&self) -> bool {
         self.records.is_empty()
+    }
+
+    pub fn save(&self, path: &Path) -> Result<()> {
+        self.validate()?;
+        let document = SchemaDocument {
+            version: FORMAT_VERSION,
+            records: self.records.values().cloned().collect(),
+        };
+        let temporary = path.with_extension("tmp");
+        fs::write(&temporary, canonical_bytes(&document)?)?;
+        fs::rename(temporary, path)?;
+        Ok(())
+    }
+
+    pub fn load(path: &Path) -> Result<Self> {
+        let bytes = fs::read(path)?;
+        let document: SchemaDocument = serde_json::from_slice(&bytes)?;
+        if document.version != FORMAT_VERSION || canonical_bytes(&document)? != bytes {
+            return Err(Error::Journal(
+                "schema registry bytes are not canonical JSON".into(),
+            ));
+        }
+        let mut registry = Self::default();
+        for descriptor in document.records {
+            registry.register(descriptor)?;
+        }
+        registry.validate()?;
+        Ok(registry)
+    }
+
+    pub fn recover(path: &Path) -> Result<Self> {
+        match Self::load(path) {
+            Ok(registry) => Ok(registry),
+            Err(Error::Persistence(error)) if error.kind() == std::io::ErrorKind::NotFound => {
+                let temporary = path.with_extension("tmp");
+                let registry = Self::load(&temporary)?;
+                fs::rename(temporary, path)?;
+                Ok(registry)
+            }
+            Err(error) => Err(error),
+        }
     }
 }
 
@@ -135,5 +196,26 @@ mod tests {
                 schema_digest: "b".repeat(64),
             })
             .is_err());
+    }
+
+    #[test]
+    fn schema_registry_snapshot_is_canonical_and_recoverable() {
+        let mut registry = SchemaRegistry::default();
+        registry.register(descriptor()).expect("register");
+        let directory = tempfile::tempdir().expect("directory");
+        let path = directory.path().join("schemas.json");
+        registry.save(&path).expect("save");
+        assert_eq!(SchemaRegistry::load(&path).expect("load"), registry);
+        let canonical = std::fs::read(&path).expect("canonical");
+
+        let mut bytes = std::fs::read(&path).expect("read");
+        let tamper_index = bytes.len() - 2;
+        bytes[tamper_index] = b' ';
+        std::fs::write(&path, bytes).expect("tamper");
+        assert!(SchemaRegistry::load(&path).is_err());
+
+        std::fs::write(path.with_extension("tmp"), canonical).expect("temporary snapshot");
+        std::fs::remove_file(&path).expect("remove primary");
+        assert_eq!(SchemaRegistry::recover(&path).expect("recover"), registry);
     }
 }

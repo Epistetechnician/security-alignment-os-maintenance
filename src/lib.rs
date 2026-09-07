@@ -20,6 +20,7 @@ pub mod alignment;
 pub mod artifacts;
 pub mod audit;
 pub mod benchmark;
+pub mod broker;
 pub mod checker;
 pub mod claims;
 pub mod contract;

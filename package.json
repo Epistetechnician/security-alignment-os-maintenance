@@ -4,6 +4,7 @@
   "scripts": {
     "lint:fast": "cargo fmt --all -- --check",
     "test:focused": "cargo test --all-targets",
+    "test:broker": "cargo test --test broker_e2e -- --nocapture",
     "verify:contracts": "cargo clippy --all-targets -- -D warnings",
     "verify:full": "pnpm run lint:fast && pnpm run test:focused && pnpm run verify:contracts",
     "lint": "pnpm run verify:full"

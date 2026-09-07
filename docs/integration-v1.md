@@ -129,10 +129,32 @@ authorization in this foundation slice. `execution_gate::ExecutionGate`
 validates a typed sandbox attestation and external job request, then returns a
 blocked disposition for every valid request.
 
+## External broker execution slice
+
+`broker::Broker` is the first process-enforced vertical slice after the
+same-process foundation. It accepts one typed file transformation over a
+`0600` Unix socket, keeps the Ed25519 private key inside the broker process,
+binds evidence, executable digest, input digest, scope, quotas, expiry, and
+nonce into a durable transaction, and invokes the separate
+`capability_supervisor` only after journaling admission and consuming the
+single-use kernel capability. The supervisor clears its environment, denies
+network access, requires a broker-generated launch token, stages output, and
+atomically commits only after source and output validation. A timeout, failed
+containment, malformed telemetry, or crash recovery freezes the broker; an
+in-flight journal record is quarantined and cannot recreate authority.
+
+`broker_adversarial_runner` and `tests/broker_e2e.rs` provide separate hostile
+client and real-process checks. They establish local evidence for authorized
+completion, unchanged originals, replay and forged-receipt rejection, direct
+supervisor rejection, path validation, malformed child-operation containment,
+telemetry freeze, and crash recovery. This evidence is limited to the named
+host backend and one operation.
+
 ## Remaining execution gates
 
-- OS sandbox, egress deny policy, secret broker and process kill enforcement;
-  the execution gate is a record validator, not enforcement.
+- Linux host hardening, authenticated process identity, independent replication,
+  and a production-grade secret broker; the local launch token is transient
+  authority for this one supervisor invocation.
 - Authenticated role/validator identities and independently reviewed evidence.
 - Model serving, consented training-data custody, candidate training and real
   held-out behavioral or causal evaluation.

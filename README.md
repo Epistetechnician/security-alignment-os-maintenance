@@ -4,10 +4,11 @@ State slice: `security-alignment-os-foundation-v1`.
 
 A runnable Rust-native local reference implementation of the HSAI
 proposal-to-rollback control loop. It integrates evidence review records,
-admission, single-use capabilities, consented specialist memory, local
-execution, monitoring, rollback, fixed receipts, governance, and audit
-persistence. It does not run a model or establish scientific alignment, OS
-isolation, authenticated independent review or production readiness.
+admission, single-use capabilities, consented specialist memory, a separate
+capability broker process, one sandboxed file transformation, rollback, fixed
+receipts, governance, and audit persistence. It does not run a model or
+establish scientific alignment, authenticated independent review, or
+production readiness.
 
 ```text
 consented tenant note + immutable specialist identity
@@ -15,7 +16,7 @@ consented tenant note + immutable specialist identity
   -> exact-subject evidence review record
   -> deterministic admission
   -> kernel-bound single-use capability
-  -> reversible dictionary execution
+  -> external broker + isolated file transformation
   -> evidence/lease/telemetry observation
   -> completion or rollback + freeze/shutdown
 ```
@@ -28,6 +29,8 @@ Rust 1.77+.
 cargo test --all-targets
 cargo clippy --all-targets -- -D warnings
 cargo run --bin local_demo
+cargo run --bin capability_broker -- <socket> <workspace> <journal> <evidence.json> <capability_supervisor>
+cargo run --bin broker_adversarial_runner -- <socket> <request.json> <workspace> <capability_supervisor>
 pnpm run lint
 ```
 
@@ -53,6 +56,8 @@ JavaScript runtime dependencies are installed.
 | `property` | Exhaustive local lattice/lifecycle checks and digest-only invariant reports |
 | `receipts` | Ed25519-signed capability receipts with exact decision binding and local replay rejection |
 | `execution_gate` | Typed sandbox/request boundary that validates controls and remains blocked locally |
+| `broker`, `capability_broker`, `capability_supervisor` | Separate Unix IPC broker, broker-only receipt issuer, staged uppercase file transformation, canonical journal, timeout/kill path, network-denied host sandbox, and frozen crash recovery |
+| `broker_adversarial_runner` | Separate hostile client for direct supervisor, path escape, replay, forged receipt, malformed child operation, and telemetry containment attempts |
 | `schema` | Versioned schema identities with exact digest-bound lookup and canonical recovery |
 | `Runtime`, `AuditJournal` | Reversible dictionary actions, terminal freeze/kill, and digest-chained audit persistence |
 | `specialist`, `memory` | Immutable specialist identities, consented retrieval, revocation, redacted telemetry, frozen tool manifests, and canonical durable memory/registry snapshots with crash recovery |
@@ -65,17 +70,20 @@ JavaScript runtime dependencies are installed.
 ## Boundaries
 
 Callers own policy, clock, identity assertions, storage paths and observations.
-Same-process Rust objects are not a sandbox against malicious code.
-Kernel issuance is process-local; journal persistence is audit persistence,
-not distributed authority or cross-process replay protection. Persisted content
-is plaintext in caller-owned storage; digests detect accidental or
-uncoordinated tampering, not an attacker able to rewrite both content and
-digest. Consent revocation blocks access; it does not claim secure disk erasure.
+The capability broker is a separate process and the supervisor has a host
+sandbox boundary for the one supported operation. A hostile same-UID process
+with workspace access can still interfere with caller-owned files or race
+filesystem state; this slice does not claim authenticated host identity or
+complete multi-tenant isolation. Persisted content is plaintext in
+caller-owned storage; digests detect accidental or uncoordinated tampering,
+not an attacker able to rewrite both content and digest. Consent revocation
+blocks access; it does not claim secure disk erasure.
 
-The remaining production gates include authenticated reviewers, real sandbox
-and egress enforcement, secret custody, model serving/training, held-out
-scientific evaluation, external red-team replication, deployment and settlement.
-The local tests do not satisfy those gates.
+The remaining production gates include authenticated reviewers, Linux host
+hardening and independent replication, secret custody beyond the transient
+launch token, model serving/training, held-out scientific evaluation, external
+red-team replication, deployment and settlement. The local tests do not
+satisfy those gates.
 
 ## Build records
 
@@ -90,6 +98,7 @@ The local tests do not satisfy those gates.
 - [Deterministic property checks](docs/property-checks-v1.md)
 - [Signed capability receipts](docs/receipts-v1.md)
 - [External execution gate](docs/execution-gate-v1.md)
+- [External capability broker](docs/broker-v1.md)
 - [Schema registry](docs/schema-v1.md)
 - [Fault injection](docs/fault-injection-v1.md)
 - [Plan conformance](docs/plan-conformance-v1.md)

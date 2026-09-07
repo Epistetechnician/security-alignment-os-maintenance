@@ -505,6 +505,27 @@ impl ReceiptVerifier {
         self.verified.contains(receipt_id)
     }
 
+    /// Verifies only the broker-issued Ed25519 signature and receipt shape.
+    /// Binding a receipt to a proposal and decision remains the responsibility
+    /// of `verify`; this narrow helper supports hostile-receipt checks at an
+    /// IPC boundary without inventing an execution claim.
+    pub fn verify_signature(&self, receipt: &CapabilityReceipt) -> Result<()> {
+        receipt.validate_shape()?;
+        let verifying_key = self
+            .trusted_keys
+            .get(&receipt.issuer_key_id)
+            .ok_or_else(|| Error::Rejected("issuer key is not trusted".into()))?;
+        let signature_bytes: [u8; SIGNATURE_LEN] = receipt
+            .signature
+            .as_slice()
+            .try_into()
+            .map_err(|_| Error::Invalid("receipt signature length is invalid".into()))?;
+        let signature = Signature::from_bytes(&signature_bytes);
+        verifying_key
+            .verify(&receipt.signing_bytes()?, &signature)
+            .map_err(|_| Error::Rejected("receipt signature verification failed".into()))
+    }
+
     /// Verifies signature, freshness, exact decision binding, and delegation
     /// identity. A receipt enters the replay set only after every check passes.
     pub fn verify(

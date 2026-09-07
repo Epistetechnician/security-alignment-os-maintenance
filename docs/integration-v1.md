@@ -22,6 +22,11 @@ followed by freeze or kill. `integration::run` returns a digest-only
 latest checkpoint and freeze the runtime, while an explicit kill request rolls
 back and marks the runtime killed.
 
+When a kernel failure budget is configured, missing evidence, rejected
+admission, receipt quarantine, and rollback observations are counted. A
+`FreezeRequired` result freezes the kernel's live lifecycles and the
+coordinator freezes the runtime before returning its disposition.
+
 `run_local_workflow` remains a compact compatibility seam for callers that need
 only `quarantined`, `rejected`, or `completed` dispositions.
 

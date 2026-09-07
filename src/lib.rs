@@ -301,6 +301,7 @@ pub struct JournalEntry {
     pub sequence: u64,
     pub previous_digest: String,
     pub candidate_digest: String,
+    pub replay_digest: String,
     pub decision_digest: String,
     pub entry_digest: String,
 }
@@ -311,8 +312,16 @@ pub struct ReplayJournal {
 }
 
 impl ReplayJournal {
-    fn append(&mut self, candidate_digest: &str, decision_digest: &str) -> Result<()> {
-        if !valid_digest(candidate_digest) || !valid_digest(decision_digest) {
+    fn append(
+        &mut self,
+        candidate_digest: &str,
+        replay_digest: &str,
+        decision_digest: &str,
+    ) -> Result<()> {
+        if !valid_digest(candidate_digest)
+            || !valid_digest(replay_digest)
+            || !valid_digest(decision_digest)
+        {
             return Err(Error::Journal(
                 "journal references must be lowercase digests".into(),
             ));
@@ -324,6 +333,13 @@ impl ReplayJournal {
         {
             return Err(Error::Journal("replayed candidate".into()));
         }
+        if self
+            .entries
+            .iter()
+            .any(|entry| entry.replay_digest == replay_digest)
+        {
+            return Err(Error::Journal("replayed agent nonce".into()));
+        }
         let previous_digest = self
             .entries
             .last()
@@ -334,6 +350,7 @@ impl ReplayJournal {
             &sequence,
             &previous_digest,
             &candidate_digest,
+            &replay_digest,
             &decision_digest,
         );
         let entry_digest = digest(&material)?;
@@ -341,6 +358,7 @@ impl ReplayJournal {
             sequence,
             previous_digest,
             candidate_digest: candidate_digest.into(),
+            replay_digest: replay_digest.into(),
             decision_digest: decision_digest.into(),
             entry_digest,
         });
@@ -349,13 +367,16 @@ impl ReplayJournal {
     pub fn validate(&self) -> Result<()> {
         let mut previous = "0".repeat(64);
         let mut seen = BTreeSet::new();
+        let mut replays = BTreeSet::new();
         for (index, entry) in self.entries.iter().enumerate() {
             if entry.sequence != index as u64
                 || entry.previous_digest != previous
                 || !valid_digest(&entry.candidate_digest)
+                || !valid_digest(&entry.replay_digest)
                 || !valid_digest(&entry.decision_digest)
                 || !valid_digest(&entry.entry_digest)
                 || !seen.insert(entry.candidate_digest.clone())
+                || !replays.insert(entry.replay_digest.clone())
             {
                 return Err(Error::Journal("invalid journal chain".into()));
             }
@@ -363,6 +384,7 @@ impl ReplayJournal {
                 &entry.sequence,
                 &entry.previous_digest,
                 &entry.candidate_digest,
+                &entry.replay_digest,
                 &entry.decision_digest,
             ))?;
             if expected != entry.entry_digest {
@@ -405,6 +427,7 @@ impl ReplayJournal {
     }
 }
 
+#[derive(Clone)]
 struct Issuance {
     candidate_digest: String,
     decision_digest: String,
@@ -418,12 +441,30 @@ pub struct KernelSnapshot {
     pub policy: Policy,
     pub journal: ReplayJournal,
     pub lifecycles: BTreeMap<String, contract::Lifecycle>,
+    pub failure_tracker: Option<contract::FailureTracker>,
+    pub frozen: bool,
+    pub killed: bool,
 }
 
 impl KernelSnapshot {
     pub fn validate(&self) -> Result<()> {
         self.policy.validate()?;
         self.journal.validate()?;
+        if self.killed && !self.frozen {
+            return Err(Error::Invalid(
+                "killed kernel snapshot is not frozen".into(),
+            ));
+        }
+        if let Some(tracker) = &self.failure_tracker {
+            tracker
+                .validate()
+                .map_err(|error| Error::Invalid(error.to_string()))?;
+            if tracker.is_exhausted() && !self.frozen {
+                return Err(Error::Invalid(
+                    "exhausted failure tracker requires a frozen kernel".into(),
+                ));
+            }
+        }
         let journal_candidates = self
             .journal
             .entries
@@ -451,6 +492,9 @@ pub struct Kernel {
     pub journal: ReplayJournal,
     issuances: BTreeMap<String, Issuance>,
     lifecycles: BTreeMap<String, contract::Lifecycle>,
+    failure_tracker: Option<contract::FailureTracker>,
+    frozen: bool,
+    killed: bool,
     lock: Mutex<()>,
 }
 
@@ -462,6 +506,9 @@ impl Kernel {
             journal: ReplayJournal::default(),
             issuances: BTreeMap::new(),
             lifecycles: BTreeMap::new(),
+            failure_tracker: None,
+            frozen: false,
+            killed: false,
             lock: Mutex::new(()),
         })
     }
@@ -470,6 +517,9 @@ impl Kernel {
             policy: self.policy.clone(),
             journal: self.journal.clone(),
             lifecycles: self.lifecycles.clone(),
+            failure_tracker: self.failure_tracker.clone(),
+            frozen: self.frozen,
+            killed: self.killed,
         }
     }
     pub fn from_snapshot(snapshot: KernelSnapshot) -> Result<Self> {
@@ -479,6 +529,9 @@ impl Kernel {
             journal: snapshot.journal,
             issuances: BTreeMap::new(),
             lifecycles: snapshot.lifecycles,
+            failure_tracker: snapshot.failure_tracker,
+            frozen: snapshot.frozen,
+            killed: snapshot.killed,
             lock: Mutex::new(()),
         })
     }
@@ -520,10 +573,72 @@ impl Kernel {
     pub fn lifecycle_records(&self) -> BTreeMap<String, contract::Lifecycle> {
         self.lifecycles.clone()
     }
+    pub fn configure_failure_budget(&mut self, budget: contract::FailureBudget) -> Result<()> {
+        let tracker = budget
+            .tracker()
+            .map_err(|error| Error::Invalid(error.to_string()))?;
+        self.failure_tracker = Some(tracker);
+        Ok(())
+    }
+    pub fn failure_tracker(&self) -> Option<&contract::FailureTracker> {
+        self.failure_tracker.as_ref()
+    }
+    pub fn observe_failure(
+        &mut self,
+        kind: contract::FailureKind,
+    ) -> Result<contract::BudgetDecision> {
+        let decision = match self.failure_tracker.as_mut() {
+            Some(tracker) => tracker
+                .record_failure(kind)
+                .map_err(|error| Error::Rejected(error.to_string()))?,
+            None => contract::BudgetDecision::Continue,
+        };
+        if decision == contract::BudgetDecision::FreezeRequired {
+            self.freeze_all()?;
+        }
+        Ok(decision)
+    }
+    pub fn observe_success(&mut self) {
+        if let Some(tracker) = self.failure_tracker.as_mut() {
+            tracker.record_success();
+        }
+    }
+    pub fn is_frozen(&self) -> bool {
+        self.frozen
+    }
+    pub fn is_killed(&self) -> bool {
+        self.killed
+    }
+    pub fn freeze_all(&mut self) -> Result<()> {
+        for lifecycle in self.lifecycles.values_mut() {
+            if !lifecycle.state.is_shutdown() {
+                lifecycle
+                    .apply(contract::LifecycleEvent::Freeze)
+                    .map_err(|error| Error::Rejected(error.to_string()))?;
+            }
+        }
+        self.frozen = true;
+        Ok(())
+    }
+    pub fn kill_all(&mut self) -> Result<()> {
+        for lifecycle in self.lifecycles.values_mut() {
+            if lifecycle.state != contract::LifecycleState::Killed {
+                lifecycle
+                    .apply(contract::LifecycleEvent::Kill)
+                    .map_err(|error| Error::Rejected(error.to_string()))?;
+            }
+        }
+        self.frozen = true;
+        self.killed = true;
+        Ok(())
+    }
     fn policy_digest(&self) -> Result<String> {
         digest(&self.policy)
     }
     pub fn admit(&mut self, proposal: &Proposal, now: u64) -> Result<Decision> {
+        if self.frozen || self.killed {
+            return Err(Error::Rejected("kernel is frozen or killed".into()));
+        }
         self.policy.validate()?;
         proposal.validate_shape(now)?;
         if proposal.requests_direct_authority {
@@ -636,7 +751,9 @@ impl Kernel {
             policy_digest.clone(),
             capability.clone(),
         ))?;
-        self.journal.append(&candidate_digest, &decision_digest)?;
+        let replay_digest = digest(&(&proposal.agent_id, proposal.nonce))?;
+        self.journal
+            .append(&candidate_digest, &replay_digest, &decision_digest)?;
         self.lifecycles.insert(candidate_digest.clone(), lifecycle);
         let decision = Decision {
             candidate_id: proposal.candidate_id.clone(),
@@ -666,6 +783,9 @@ impl Kernel {
             .lock
             .lock()
             .map_err(|_| Error::Rejected("kernel lock poisoned".into()))?;
+        if self.frozen || self.killed {
+            return Ok(false);
+        }
         let key = proposal.digest()?;
         self.policy.validate()?;
         let current_policy_digest = self.policy_digest()?;
@@ -677,26 +797,38 @@ impl Kernel {
         if next_lifecycle.state != contract::LifecycleState::Admitted {
             return Ok(false);
         }
-        next_lifecycle
-            .apply(contract::LifecycleEvent::BeginExecution)
-            .map_err(|error| Error::Rejected(error.to_string()))?;
         let issuance = self
             .issuances
-            .get_mut(&key)
+            .get(&key)
+            .cloned()
             .ok_or_else(|| Error::Rejected("unknown issuance".into()))?;
+        let policy_stale = decision.policy_digest != issuance.policy_digest
+            || decision.policy_digest != current_policy_digest;
+        if policy_stale {
+            next_lifecycle
+                .apply(contract::LifecycleEvent::Quarantine)
+                .map_err(|error| Error::Rejected(error.to_string()))?;
+            self.lifecycles.insert(key, next_lifecycle);
+            return Ok(false);
+        }
         if issuance.consumed
             || decision.kind != DecisionKind::Accepted
             || decision.candidate_digest != issuance.candidate_digest
             || decision.decision_digest != issuance.decision_digest
             || decision.policy_digest != issuance.policy_digest
-            || decision.policy_digest != current_policy_digest
             || decision.capability.as_ref() != Some(&issuance.capability)
             || now < issuance.capability.issued_at
             || issuance.capability.expires_at <= now
         {
             return Ok(false);
         }
-        issuance.consumed = true;
+        next_lifecycle
+            .apply(contract::LifecycleEvent::BeginExecution)
+            .map_err(|error| Error::Rejected(error.to_string()))?;
+        self.issuances
+            .get_mut(&key)
+            .ok_or_else(|| Error::Rejected("unknown issuance".into()))?
+            .consumed = true;
         self.lifecycles.insert(key, next_lifecycle);
         Ok(true)
     }
@@ -1212,6 +1344,23 @@ mod tests {
     }
 
     #[test]
+    fn same_agent_nonce_cannot_admit_changed_candidate() {
+        let mut kernel = Kernel::new(Policy::default()).unwrap();
+        let first = proposal("nonce-first");
+        kernel.admit(&first, 10).unwrap();
+        let mut changed = proposal("nonce-second");
+        changed
+            .payload
+            .insert("value".into(), Value::Number(2.into()));
+        assert!(matches!(
+            kernel.admit(&changed, 10),
+            Err(Error::Journal(message)) if message == "replayed agent nonce"
+        ));
+        assert_eq!(kernel.journal.entries.len(), 1);
+        checker::validate_replay(&kernel.journal).unwrap();
+    }
+
+    #[test]
     fn evidence_registry_snapshot_is_canonical_and_recoverable() {
         let mut registry = EvidenceRegistry::default();
         registry
@@ -1251,8 +1400,9 @@ mod tests {
     fn rollback_restores_latest_checkpoint_and_preserves_earlier_state() {
         let mut kernel = Kernel::new(Policy::default()).unwrap();
         let mut runtime = Runtime::default();
-        for (id, value) in [("one", 1), ("two", 2)] {
+        for (nonce, (id, value)) in [(1, ("one", 1)), (2, ("two", 2))] {
             let mut p = proposal(id);
+            p.nonce = nonce;
             p.payload
                 .insert("value".into(), Value::Number(value.into()));
             let decision = kernel.admit(&p, 10).unwrap();
@@ -1377,6 +1527,7 @@ mod tests {
         .enumerate()
         {
             let mut candidate = proposal(&format!("blocked-{index}"));
+            candidate.nonce = index as u64 + 1;
             candidate.action = action;
             let decision = kernel.admit(&candidate, 10).unwrap();
             assert_eq!(decision.kind, DecisionKind::Rejected);
@@ -1424,7 +1575,9 @@ mod tests {
     #[test]
     fn journal_round_trip_and_tamper_detection() {
         let mut journal = ReplayJournal::default();
-        journal.append(&"a".repeat(64), &"b".repeat(64)).unwrap();
+        journal
+            .append(&"a".repeat(64), &"c".repeat(64), &"b".repeat(64))
+            .unwrap();
         let dir = tempdir().unwrap();
         let path = dir.path().join("journal.json");
         journal.save(&path).unwrap();
@@ -1665,6 +1818,66 @@ mod tests {
         let mut invalid = kernel.snapshot();
         invalid.lifecycles.clear();
         assert!(Kernel::from_snapshot(invalid).is_err());
+    }
+
+    #[test]
+    fn kernel_global_kill_closes_shared_runtime_consumption() {
+        let mut kernel = Kernel::new(Policy::default()).unwrap();
+        let mut runtime = Runtime::default();
+        let p = proposal("global-kill");
+        let digest = p.digest().unwrap();
+        let decision = kernel.admit(&p, 10).unwrap();
+        kernel.kill_all().unwrap();
+        assert!(kernel.is_killed());
+        assert!(kernel.is_frozen());
+        assert_eq!(
+            kernel.lifecycle_state(&digest),
+            Some(contract::LifecycleState::Killed)
+        );
+        assert!(runtime.execute(&mut kernel, &p, &decision, 10).is_err());
+        assert!(runtime.state.is_empty());
+        assert!(runtime.audit.is_empty());
+        assert!(kernel.admit(&proposal("after-global-kill"), 10).is_err());
+    }
+
+    #[test]
+    fn failure_budget_freezes_coordinator_and_kernel() {
+        let mut kernel = Kernel::new(Policy::default()).unwrap();
+        kernel
+            .configure_failure_budget(contract::FailureBudget {
+                max_rejections: 100,
+                max_quarantines: 1,
+                max_rollbacks: 100,
+                max_consecutive_failures: 100,
+                max_window_failures: 100,
+                window_size: 100,
+            })
+            .unwrap();
+        let mut runtime = Runtime::default();
+        let result = integration::run(
+            &mut kernel,
+            &mut runtime,
+            &EvidenceRegistry::default(),
+            "missing",
+            &proposal("budget-quarantine"),
+            integration::Observation {
+                at: 10,
+                healthy: true,
+                telemetry_present: true,
+                kill_requested: false,
+            },
+        )
+        .unwrap();
+        assert_eq!(result.disposition, integration::Disposition::Quarantined);
+        assert!(runtime.is_frozen());
+        assert!(kernel.is_frozen());
+        assert_eq!(
+            kernel
+                .failure_tracker()
+                .map(|tracker| tracker.is_exhausted()),
+            Some(true)
+        );
+        assert!(kernel.admit(&proposal("after-budget"), 10).is_err());
     }
 
     #[test]

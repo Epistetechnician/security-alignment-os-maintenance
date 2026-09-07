@@ -12,16 +12,16 @@ The deterministic scenarios are:
 
 | Scenario | Required disposition | Boundary exercised |
 | --- | --- | --- |
-| `replay` | `Rejected` | Duplicate proposal cannot append a second replay-journal entry. |
+| `replay` | `Rejected` | Duplicate candidate or same-agent nonce cannot append a second replay-journal entry. |
 | `stale_clock` | `Rejected` | An expired capability fails before runtime state or audit mutation. |
-| `stale_policy_digest` | `Rejected` | A policy change after admission is detected before execution. |
+| `stale_policy_digest` | `Quarantined` | A policy change after admission is detected and closes the lifecycle before execution. |
 | `malformed_journal_bytes` | `Quarantined` | Noncanonical, malformed, or tampered journal bytes fail through `ReplayJournal::load`. |
 | `partial_write` | `RolledBack` | The latest runtime checkpoint restores the pre-write state digest. |
 | `kill_freeze_observation` | `Frozen` | An unhealthy or kill observation rolls back the action and closes the runtime. |
 
 The stale-policy scenario exercises `Kernel::consume` directly. Consumption
-recomputes the current policy digest and rejects a decision issued under an old
-policy before runtime state can change.
+recomputes the current policy digest and quarantines a decision issued under an
+old policy before runtime state can change.
 
 The tests are hermetic and local:
 

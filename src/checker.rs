@@ -63,13 +63,16 @@ fn valid_text(value: &str) -> bool {
 pub fn validate_replay(journal: &ReplayJournal) -> Result<()> {
     let mut previous = "0".repeat(64);
     let mut seen = BTreeSet::new();
+    let mut replays = BTreeSet::new();
     for (index, entry) in journal.entries.iter().enumerate() {
         if entry.sequence != index as u64
             || entry.previous_digest != previous
             || !valid_digest(&entry.candidate_digest)
+            || !valid_digest(&entry.replay_digest)
             || !valid_digest(&entry.decision_digest)
             || !valid_digest(&entry.entry_digest)
             || !seen.insert(entry.candidate_digest.clone())
+            || !replays.insert(entry.replay_digest.clone())
         {
             return Err(Error::Journal("independent replay check failed".into()));
         }
@@ -77,6 +80,7 @@ pub fn validate_replay(journal: &ReplayJournal) -> Result<()> {
             &entry.sequence,
             &entry.previous_digest,
             &entry.candidate_digest,
+            &entry.replay_digest,
             &entry.decision_digest,
         ))?;
         if expected != entry.entry_digest {

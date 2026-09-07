@@ -18,7 +18,7 @@ State slice: `security-alignment-os-foundation-v1`.
 | Threat | Control | Local test |
 |---|---|---|
 | Direct authority request | deterministic rejection | `rejection_and_evidence_gates_are_fail_closed` |
-| Replay | journal candidate uniqueness and chain validation | `end_to_end_completion_and_replay` |
+| Replay | journal candidate and agent-nonce uniqueness with chain validation | `end_to_end_completion_and_replay` |
 | Scope escalation | intent-bound token plus scope check | `malformed_write_is_rejected_before_capability_consumption` |
 | Missing provenance | quarantine | adversarial benchmark |
 | Budget overrun | exact integer policy ceiling | adversarial benchmark |

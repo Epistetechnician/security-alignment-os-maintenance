@@ -8,8 +8,8 @@
 
 use crate::receipts::{CapabilityReceipt, ReceiptVerifier};
 use crate::{
-    artifacts::ArtifactRegistry, digest, DecisionKind, EvidenceRegistry, Kernel, Proposal, Result,
-    Runtime,
+    artifacts::ArtifactRegistry, contract, digest, DecisionKind, EvidenceRegistry, Kernel,
+    Proposal, Result, Runtime,
 };
 use serde::{Deserialize, Serialize};
 
@@ -61,6 +61,11 @@ pub fn run(
     let subject_digest = proposal.digest()?;
     let observation_digest = digest(&observation)?;
     if !evidence.is_valid(evidence_id, observation.at, &subject_digest) {
+        if kernel.observe_failure(contract::FailureKind::Quarantine)?
+            == contract::BudgetDecision::FreezeRequired
+        {
+            runtime.freeze("failure budget exhausted");
+        }
         return Ok(WorkflowResult {
             disposition: Disposition::Quarantined,
             subject_digest,
@@ -70,6 +75,11 @@ pub fn run(
     }
     let decision = kernel.admit(proposal, observation.at)?;
     if decision.kind != DecisionKind::Accepted {
+        if kernel.observe_failure(contract::FailureKind::Rejection)?
+            == contract::BudgetDecision::FreezeRequired
+        {
+            runtime.freeze("failure budget exhausted");
+        }
         return Ok(WorkflowResult {
             disposition: Disposition::Rejected,
             subject_digest,
@@ -103,12 +113,15 @@ fn complete_admitted(
         if rolled_back {
             kernel.rollback(proposal)?;
         }
+        let budget_decision = kernel.observe_failure(contract::FailureKind::Rollback)?;
         if observation.kill_requested {
             runtime.kill("kill observation");
             kernel.kill(proposal)?;
         } else {
             runtime.freeze("unhealthy observation");
-            kernel.freeze(proposal)?;
+            if budget_decision != contract::BudgetDecision::FreezeRequired {
+                kernel.freeze(proposal)?;
+            }
         }
         return Ok(WorkflowResult {
             disposition: if rolled_back {
@@ -122,6 +135,7 @@ fn complete_admitted(
         });
     }
     kernel.complete(proposal)?;
+    kernel.observe_success();
     Ok(WorkflowResult {
         disposition: Disposition::Completed,
         subject_digest,
@@ -145,6 +159,11 @@ pub fn run_with_receipt(
     let subject_digest = proposal.digest()?;
     let observation_digest = digest(&observation)?;
     if !evidence.is_valid(evidence_id, observation.at, &subject_digest) {
+        if kernel.observe_failure(contract::FailureKind::Quarantine)?
+            == contract::BudgetDecision::FreezeRequired
+        {
+            runtime.freeze("failure budget exhausted");
+        }
         return Ok(WorkflowResult {
             disposition: Disposition::Quarantined,
             subject_digest,
@@ -154,6 +173,11 @@ pub fn run_with_receipt(
     }
     let decision = kernel.admit(proposal, observation.at)?;
     if decision.kind != DecisionKind::Accepted {
+        if kernel.observe_failure(contract::FailureKind::Rejection)?
+            == contract::BudgetDecision::FreezeRequired
+        {
+            runtime.freeze("failure budget exhausted");
+        }
         return Ok(WorkflowResult {
             disposition: Disposition::Rejected,
             subject_digest,
@@ -174,6 +198,11 @@ pub fn run_with_receipt(
         .is_err()
     {
         kernel.quarantine(proposal)?;
+        if kernel.observe_failure(contract::FailureKind::Quarantine)?
+            == contract::BudgetDecision::FreezeRequired
+        {
+            runtime.freeze("failure budget exhausted");
+        }
         return Ok(WorkflowResult {
             disposition: Disposition::Quarantined,
             subject_digest,

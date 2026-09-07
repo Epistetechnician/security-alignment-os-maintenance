@@ -57,29 +57,32 @@ fn outcome(
 }
 
 /// Admits a proposal twice and classifies the second journal append as a
-/// replay rejection. The duplicate attempt must not append a second entry.
+/// replay rejection. Both exact candidate replay and same-agent nonce replay
+/// must not append a second entry.
 pub fn replay(kernel: &mut Kernel, proposal: &Proposal, now: u64) -> Result<FaultOutcome> {
     let input_digest = proposal.digest()?;
     let _first = kernel.admit(proposal, now)?;
-    let second = kernel.admit(proposal, now);
+    let mut changed = proposal.clone();
+    changed.candidate_id.push_str("-changed");
+    let second = kernel.admit(&changed, now);
     match second {
         Err(Error::Journal(_)) => outcome(
             FaultScenario::Replay,
             FaultDisposition::Rejected,
             input_digest,
-            "duplicate-candidate-rejected",
+            "duplicate-agent-nonce-rejected",
         ),
         Ok(_) => outcome(
             FaultScenario::Replay,
             FaultDisposition::NotDetected,
             input_digest,
-            "duplicate-candidate-was-accepted",
+            "duplicate-agent-nonce-was-accepted",
         ),
         Err(_) => outcome(
             FaultScenario::Replay,
             FaultDisposition::Quarantined,
             input_digest,
-            "duplicate-candidate-reached-unexpected-error",
+            "duplicate-agent-nonce-reached-unexpected-error",
         ),
     }
 }
@@ -119,7 +122,7 @@ pub fn stale_clock(
 }
 
 /// Changes the policy after admission and verifies that kernel consumption is
-/// rejected while the decision carries a stale policy digest.
+/// quarantined while the decision carries a stale policy digest.
 pub fn stale_policy_digest(
     kernel: &mut Kernel,
     proposal: &Proposal,
@@ -133,20 +136,23 @@ pub fn stale_policy_digest(
     kernel.policy = changed_policy;
     let current_policy_digest = digest(&kernel.policy)?;
     let consumed = kernel.consume(proposal, &decision, now)?;
-    let stale = decision.policy_digest != current_policy_digest && !consumed;
+    let stale = decision.policy_digest != current_policy_digest
+        && !consumed
+        && kernel.lifecycle_state(&input_digest)
+            == Some(crate::contract::LifecycleState::Quarantined);
     kernel.policy = original_policy;
     outcome(
         FaultScenario::StalePolicyDigest,
         if stale {
-            FaultDisposition::Rejected
+            FaultDisposition::Quarantined
         } else {
             FaultDisposition::NotDetected
         },
         input_digest,
         if stale {
-            "decision-policy-digest-no-longer-matches"
+            "decision-policy-digest-quarantined"
         } else {
-            "decision-policy-digest-still-matches"
+            "decision-policy-digest-was-not-quarantined"
         },
     )
 }
@@ -347,10 +353,10 @@ mod tests {
     }
 
     #[test]
-    fn stale_policy_is_rejected_before_execution() {
+    fn stale_policy_is_quarantined_before_execution() {
         let mut kernel = Kernel::new(Policy::default()).unwrap();
         let result = stale_policy_digest(&mut kernel, &proposal("policy"), 10).unwrap();
-        assert_eq!(result.disposition, FaultDisposition::Rejected);
+        assert_eq!(result.disposition, FaultDisposition::Quarantined);
         assert_eq!(kernel.policy, Policy::default());
     }
 

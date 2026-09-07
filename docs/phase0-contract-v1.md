@@ -88,8 +88,9 @@ not provide an independent monitor or process kill.
 
 These counters are caller-owned local observations. They do not provide a
 distributed failure detector, trusted clock, independent monitor, or automatic
-process kill. An integration layer must wire `FreezeRequired` to its own
-fail-closed lifecycle transition.
+process kill. `Kernel::observe_failure` wires `FreezeRequired` to the local
+kernel lifecycle freeze and returns the decision so the coordinator can freeze
+its runtime as well.
 
 ## Validation
 

@@ -11,6 +11,9 @@ The Rust public interfaces are:
 Kernel::admit(proposal, now) -> Decision
 Kernel::consume(proposal, decision, now) -> bool
 Kernel::complete/rollback/quarantine/freeze/kill(proposal) -> bool
+Kernel::configure_failure_budget(budget)
+Kernel::observe_failure(kind) -> BudgetDecision
+Kernel::freeze_all/kill_all()
 KernelSnapshot::save/load/recover(path)
 ReplayJournal::save(path) / load(path) / recover(path)
 ```
@@ -30,6 +33,9 @@ admission changes the candidate digest and invalidates the issued decision.
 Issued token budgets and policy ceilings are snapshotted into immutable
 mappings. Budget checks are performed before broker state changes, including
 for rejected over-budget and malformed uses. Zero-cost use is still single-use.
+The replay journal binds a digest of `(agent_id, nonce)` in addition to the
+candidate digest, so a nonce cannot be reused by the same agent under a changed
+candidate.
 
 Every journaled proposal also receives a lifecycle record. Accepted admission
 transitions `Proposal -> Admitted`, successful capability consumption requires
@@ -37,6 +43,9 @@ transitions `Proposal -> Admitted`, successful capability consumption requires
 `Complete`, `Rollback`, `Freeze`, or `Kill` through the same kernel state
 machine. A frozen or killed lifecycle cannot consume a capability, including
 from another runtime instance sharing the kernel.
+If the current policy digest differs from the decision's issuance digest,
+consumption quarantines the admitted lifecycle and leaves the private issuance
+unconsumed.
 
 Admission rejects non-integer resource values and timestamps, uppercase or
 malformed SHA-256 digests, stale required claims, and required claims that
@@ -59,9 +68,12 @@ path is absent, covering a crash between temporary write and atomic rename. A
 present but malformed primary remains an error and is never silently replaced.
 The runtime uses the same rule through `RuntimeSnapshot::recover_snapshot`,
 binding state, checkpoints, shutdown flags, and the audit chain together.
-`KernelSnapshot` persists the policy, journal, and lifecycle records only;
-private capability issuances are intentionally not serialized, so a restarted
-kernel cannot recreate authority from an accepted decision alone.
+`KernelSnapshot` persists the policy, journal, lifecycle records, failure-budget
+state, and global shutdown flags. Private capability issuances are intentionally
+not serialized, so a restarted kernel cannot recreate authority from an
+accepted decision alone. When a configured failure tracker reaches an inclusive
+ceiling, `observe_failure` freezes the kernel and every live lifecycle; a caller
+must still freeze its runtime through the returned `FreezeRequired` decision.
 
 Validation performed for this lane:
 

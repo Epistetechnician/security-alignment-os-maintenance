@@ -235,6 +235,7 @@ pub fn run_with_artifact(
         .require_valid(binding.artifact_id, &proposal.source_digest, observation.at)
         .is_err()
     {
+        observe_failure(kernel, runtime, contract::FailureKind::Quarantine)?;
         return Ok(WorkflowResult {
             disposition: Disposition::Quarantined,
             subject_digest,
@@ -433,5 +434,48 @@ mod tests {
         assert!(error.is_err());
         assert!(runtime.is_frozen());
         assert!(kernel.is_frozen());
+    }
+
+    #[test]
+    fn missing_artifact_counts_as_quarantine_failure() {
+        let mut kernel = Kernel::new(Policy::default()).expect("kernel");
+        kernel
+            .configure_failure_budget(crate::contract::FailureBudget {
+                max_rejections: 10,
+                max_quarantines: 1,
+                max_rollbacks: 10,
+                max_consecutive_failures: 10,
+                max_window_failures: 10,
+                window_size: 10,
+            })
+            .expect("budget");
+        let mut runtime = Runtime::default();
+        let evidence = EvidenceRegistry::default();
+        let artifacts = ArtifactRegistry::default();
+        let result = run_with_artifact(
+            &mut kernel,
+            &mut runtime,
+            EvidenceBinding {
+                evidence: &evidence,
+                evidence_id: "missing-evidence",
+                artifacts: &artifacts,
+                artifact_id: "missing-artifact",
+            },
+            &proposal(),
+            Observation {
+                at: 10,
+                healthy: true,
+                telemetry_present: true,
+                kill_requested: false,
+            },
+        )
+        .expect("workflow");
+        assert_eq!(result.disposition, Disposition::Quarantined);
+        assert!(runtime.is_frozen());
+        assert!(kernel.is_frozen());
+        assert_eq!(
+            kernel.failure_tracker().map(|tracker| tracker.quarantines),
+            Some(1)
+        );
     }
 }

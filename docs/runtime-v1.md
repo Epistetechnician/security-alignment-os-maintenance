@@ -10,6 +10,9 @@ checkpoint. `rollback` restores the latest checkpoint while retaining consumed
 authority. `freeze` stops execution and rollback; `kill` also marks the runtime
 killed. Repeated freeze/kill calls do not append duplicate shutdown events.
 Audit records contain operation metadata and state digests, not values.
+`RuntimeSnapshot` persists state, checkpoints, shutdown flags, and audit records
+as canonical JSON; `recover_snapshot` promotes a validated temporary snapshot
+only when the primary is absent.
 
 `SpecialistRegistry` serves immutable `SpecialistIdentity` records and refuses
 identity drift. Revocation is explicit and permanent for a registered ID.

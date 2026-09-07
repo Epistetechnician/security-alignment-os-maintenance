@@ -47,6 +47,8 @@ financial authority.
 `recover(path)` promotes the canonical temporary snapshot only when the primary
 path is absent, covering a crash between temporary write and atomic rename. A
 present but malformed primary remains an error and is never silently replaced.
+The runtime uses the same rule through `RuntimeSnapshot::recover_snapshot`,
+binding state, checkpoints, shutdown flags, and the audit chain together.
 
 Validation performed for this lane:
 

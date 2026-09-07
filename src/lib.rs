@@ -598,7 +598,75 @@ pub struct Runtime {
     killed: bool,
 }
 
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct RuntimeSnapshot {
+    pub state: BTreeMap<String, Value>,
+    pub audit: Vec<BTreeMap<String, String>>,
+    pub checkpoints: Vec<BTreeMap<String, Value>>,
+    pub frozen: bool,
+    pub killed: bool,
+}
+
 impl Runtime {
+    pub fn snapshot(&self) -> RuntimeSnapshot {
+        RuntimeSnapshot {
+            state: self.state.clone(),
+            audit: self.audit.clone(),
+            checkpoints: self.checkpoints.clone(),
+            frozen: self.frozen,
+            killed: self.killed,
+        }
+    }
+
+    pub fn from_snapshot(snapshot: RuntimeSnapshot) -> Result<Self> {
+        if snapshot.killed && !snapshot.frozen {
+            return Err(Error::Invalid(
+                "killed runtime snapshot is not frozen".into(),
+            ));
+        }
+        audit::AuditJournal::from_records(&snapshot.audit)?.validate()?;
+        Ok(Self {
+            state: snapshot.state,
+            audit: snapshot.audit,
+            checkpoints: snapshot.checkpoints,
+            frozen: snapshot.frozen,
+            killed: snapshot.killed,
+        })
+    }
+
+    pub fn save_snapshot(&self, path: &Path) -> Result<()> {
+        let snapshot = self.snapshot();
+        Self::from_snapshot(snapshot.clone())?;
+        let temporary = path.with_extension("tmp");
+        fs::write(&temporary, canonical_bytes(&snapshot)?)?;
+        fs::rename(temporary, path)?;
+        Ok(())
+    }
+
+    pub fn load_snapshot(path: &Path) -> Result<Self> {
+        let bytes = fs::read(path)?;
+        let snapshot: RuntimeSnapshot = serde_json::from_slice(&bytes)?;
+        if canonical_bytes(&snapshot)? != bytes {
+            return Err(Error::Journal(
+                "runtime snapshot bytes are not canonical JSON".into(),
+            ));
+        }
+        Self::from_snapshot(snapshot)
+    }
+
+    pub fn recover_snapshot(path: &Path) -> Result<Self> {
+        match Self::load_snapshot(path) {
+            Ok(runtime) => Ok(runtime),
+            Err(Error::Persistence(error)) if error.kind() == std::io::ErrorKind::NotFound => {
+                let temporary = path.with_extension("tmp");
+                let runtime = Self::load_snapshot(&temporary)?;
+                fs::rename(temporary, path)?;
+                Ok(runtime)
+            }
+            Err(error) => Err(error),
+        }
+    }
+
     pub fn is_frozen(&self) -> bool {
         self.frozen
     }
@@ -1319,6 +1387,36 @@ mod tests {
         release.freeze("c").unwrap();
         assert_eq!(release.state("c"), Some(governance::ReleaseState::Frozen));
         assert!(release.freeze("c").is_err());
+    }
+
+    #[test]
+    fn runtime_snapshot_is_canonical_and_recoverable() {
+        let mut runtime = Runtime::default();
+        runtime
+            .state
+            .insert("sandbox:key".into(), Value::Number(7.into()));
+        runtime.kill("snapshot");
+        let directory = tempdir().unwrap();
+        let path = directory.path().join("runtime.json");
+        runtime.save_snapshot(&path).unwrap();
+        let loaded = Runtime::load_snapshot(&path).unwrap();
+        assert_eq!(loaded.snapshot(), runtime.snapshot());
+        let canonical = fs::read(&path).unwrap();
+        let mut tampered = canonical.clone();
+        let tamper_index = tampered.len() - 2;
+        tampered[tamper_index] = b' ';
+        fs::write(&path, tampered).unwrap();
+        assert!(Runtime::load_snapshot(&path).is_err());
+        fs::write(path.with_extension("tmp"), canonical).unwrap();
+        fs::remove_file(&path).unwrap();
+        assert_eq!(
+            Runtime::recover_snapshot(&path).unwrap().snapshot(),
+            runtime.snapshot()
+        );
+
+        let mut invalid = runtime.snapshot();
+        invalid.frozen = false;
+        assert!(Runtime::from_snapshot(invalid).is_err());
     }
 
     #[test]

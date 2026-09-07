@@ -36,7 +36,9 @@ already quarantined or shut down the lifecycle, that terminal decision is
 preserved.
 
 `run_local_workflow` remains a compact compatibility seam for callers that need
-only `quarantined`, `rejected`, or `completed` dispositions.
+string dispositions. It delegates to the same coordinator, so evidence,
+failure-budget, lifecycle, rollback, and freeze behavior cannot diverge; it
+returns `quarantined`, `rejected`, `completed`, or `rolled_back`.
 
 `integration::run_with_receipt` adds a typed `ReceiptBinding` seam. It admits
 the proposal, verifies the signed receipt against the resulting decision and

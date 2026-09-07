@@ -1273,16 +1273,25 @@ pub fn run_local_workflow(
     proposal: &Proposal,
     now: u64,
 ) -> Result<&'static str> {
-    let subject = proposal.digest()?;
-    if !evidence.is_valid(evidence_id, now, &subject) {
-        return Ok("quarantined");
-    }
-    let decision = kernel.admit(proposal, now)?;
-    if decision.kind != DecisionKind::Accepted {
-        return Ok("rejected");
-    }
-    runtime.execute(kernel, proposal, &decision, now)?;
-    Ok("completed")
+    let result = integration::run(
+        kernel,
+        runtime,
+        evidence,
+        evidence_id,
+        proposal,
+        integration::Observation {
+            at: now,
+            healthy: true,
+            telemetry_present: true,
+            kill_requested: false,
+        },
+    )?;
+    Ok(match result.disposition {
+        integration::Disposition::Quarantined => "quarantined",
+        integration::Disposition::Rejected => "rejected",
+        integration::Disposition::Completed => "completed",
+        integration::Disposition::RolledBack => "rolled_back",
+    })
 }
 
 pub type SharedKernel = Arc<Mutex<Kernel>>;
@@ -2058,6 +2067,37 @@ mod tests {
             })
             .is_err());
         assert!(kernel.admit(&proposal("after-budget"), 10).is_err());
+    }
+
+    #[test]
+    fn compatibility_workflow_uses_failure_budget() {
+        let mut kernel = Kernel::new(Policy::default()).unwrap();
+        kernel
+            .configure_failure_budget(contract::FailureBudget {
+                max_rejections: 10,
+                max_quarantines: 1,
+                max_rollbacks: 10,
+                max_consecutive_failures: 10,
+                max_window_failures: 10,
+                window_size: 10,
+            })
+            .unwrap();
+        let mut runtime = Runtime::default();
+        let result = run_local_workflow(
+            &mut kernel,
+            &mut runtime,
+            &EvidenceRegistry::default(),
+            "missing",
+            &proposal("compatibility-budget"),
+            10,
+        );
+        assert_eq!(result.unwrap(), "quarantined");
+        assert!(runtime.is_frozen());
+        assert!(kernel.is_frozen());
+        assert_eq!(
+            kernel.failure_tracker().map(|tracker| tracker.quarantines),
+            Some(1)
+        );
     }
 
     #[test]

@@ -75,7 +75,7 @@ impl ArtifactManifest {
     }
 
     pub fn active(&self, now: u64) -> bool {
-        self.retention_start <= now && now < self.retention_until
+        self.validate().is_ok() && self.retention_start <= now && now < self.retention_until
     }
 
     pub fn digest(&self) -> Result<String> {
@@ -415,6 +415,7 @@ mod tests {
         let mut invalid = manifest();
         invalid.custody_root = "\n".into();
         assert!(invalid.validate().is_err());
+        assert!(!invalid.active(12));
     }
 
     #[test]

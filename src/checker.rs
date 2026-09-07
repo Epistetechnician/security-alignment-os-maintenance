@@ -156,6 +156,7 @@ pub fn validate_receipt(job: &SumJob, receipt: &SumReceipt, now: u64) -> Result<
             .any(|character| character.is_control())
         || job.inputs.is_empty()
         || job.inputs.len() > 1024
+        || job.input_commitment != digest(&job.inputs)?
         || job.deadline == 0
         || job.program_digest != expected_program_digest
         || job.output_schema_digest != expected_output_schema_digest
@@ -172,6 +173,7 @@ pub fn validate_receipt(job: &SumJob, receipt: &SumReceipt, now: u64) -> Result<
         || receipt.job_digest != digest(job)?
         || receipt.program_digest != job.program_digest
         || receipt.input_digest != digest(&job.inputs)?
+        || receipt.input_digest != job.input_commitment
         || receipt.output_schema_digest != job.output_schema_digest
         || receipt.receipt_type != job.receipt_type
         || receipt.privacy_requirement != job.privacy_requirement

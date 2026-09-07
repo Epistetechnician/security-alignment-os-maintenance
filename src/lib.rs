@@ -1758,6 +1758,7 @@ mod tests {
     fn fixed_market_selects_typed_offer_and_binds_result_commitment() {
         let job =
             market::SumJob::new("offers".into(), "requester".into(), vec![4, 5], 100, 10).unwrap();
+        assert_eq!(job.input_commitment, digest(&job.inputs).unwrap());
         let offers = vec![
             market::SumOffer::new(&job, "offer-a".into(), "provider-a".into(), 5, 10, 90).unwrap(),
             market::SumOffer::new(&job, "offer-b".into(), "provider-b".into(), 3, 10, 90).unwrap(),
@@ -1771,9 +1772,20 @@ mod tests {
 
         let mut tampered = offers[1].clone();
         tampered.result_digest = "f".repeat(64);
+        assert!(tampered.validate(&job, 20).is_err());
+        assert!(market::select_offer(&job, &[tampered.clone()], 20).is_err());
         assert!(market::execute_local_with_offer(&job, &tampered, 20).is_err());
         let mut verifier = market::ReceiptVerifier::default();
         assert!(verifier.verify(&job, &receipt, 20).unwrap());
+
+        let mut expired = offers[0].clone();
+        expired.expires_at = 20;
+        assert!(market::select_offer(&job, &[expired], 20).is_err());
+
+        let mut tampered_job = job.clone();
+        tampered_job.input_commitment = "e".repeat(64);
+        assert!(tampered_job.validate().is_err());
+        assert!(!verifier.verify(&tampered_job, &receipt, 20).unwrap());
     }
 
     #[test]

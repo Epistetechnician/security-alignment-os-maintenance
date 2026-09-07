@@ -27,6 +27,7 @@ pub struct SumJob {
     pub job_id: String,
     pub requester: String,
     pub inputs: Vec<u64>,
+    pub input_commitment: String,
     pub deadline: u64,
     pub max_price: u64,
     pub program_digest: String,
@@ -44,10 +45,12 @@ impl SumJob {
         max_price: u64,
     ) -> Result<Self> {
         let program_digest = digest(&("fixed-integer-sum", 1u8))?;
+        let input_commitment = digest(&inputs)?;
         let job = Self {
             job_id,
             requester,
             inputs,
+            input_commitment,
             deadline,
             max_price,
             program_digest,
@@ -71,6 +74,7 @@ impl SumJob {
                 .any(|character| character.is_control())
             || self.inputs.is_empty()
             || self.inputs.len() > 1024
+            || self.input_commitment != digest(&self.inputs)?
             || self.deadline == 0
             || self.program_digest != expected_program_digest
             || self.output_schema_digest != expected_output_schema_digest
@@ -118,6 +122,7 @@ impl SumReceipt {
             || self.job_digest != job.digest()?
             || self.program_digest != job.program_digest
             || self.input_digest != digest(&job.inputs)?
+            || self.input_digest != job.input_commitment
             || self.output_schema_digest != job.output_schema_digest
             || self.receipt_type != job.receipt_type
             || self.privacy_requirement != job.privacy_requirement
@@ -186,7 +191,7 @@ impl SumOffer {
                 .any(|character| character.is_control())
             || self.provider == job.requester
             || self.runtime_digest != runtime_digest()?
-            || !valid_digest(&self.result_digest)
+            || self.result_digest != result_digest(job, checked_sum(&job.inputs)?)?
             || self.receipt_type != job.receipt_type
             || self.price > job.max_price
             || self.submitted_at > now

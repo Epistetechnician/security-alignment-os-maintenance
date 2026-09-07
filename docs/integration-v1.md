@@ -42,6 +42,13 @@ It does not provide authenticated authorship or cross-process append locking.
 `checker` independently recomputes replay, audit and fixed-receipt invariants
 for local regression. Its result is not independent acceptance evidence.
 
+`receipts::ReceiptSigner` can issue an Ed25519 signature over a capability
+receipt only after proposal, decision, policy, capability, subject, and
+validity bindings recompute exactly. `receipts::ReceiptVerifier` checks the
+signature, freshness, bindings, trusted local key registry, and process-local
+replay set. This authenticates bytes under a caller-provided key; it does not
+authenticate the host or make the signer independent.
+
 ## Downstream local contracts
 
 `market::SumJob` accepts one fixed non-negative integer-sum job class. A separate
@@ -57,11 +64,14 @@ does not deploy an adapter or authorize an external executor.
 `specialist::ToolRegistry` binds tool ID/version, implementation digest and a
 canonical manifest-list digest. `adapters::AdapterPlan` validates the shape of
 an external sandbox/invocation request but rejects external execution
-authorization in this foundation slice.
+authorization in this foundation slice. `execution_gate::ExecutionGate`
+validates a typed sandbox attestation and external job request, then returns a
+blocked disposition for every valid request.
 
 ## Remaining execution gates
 
-- OS sandbox, egress deny policy, secret broker and process kill enforcement.
+- OS sandbox, egress deny policy, secret broker and process kill enforcement;
+  the execution gate is a record validator, not enforcement.
 - Authenticated role/validator identities and independently reviewed evidence.
 - Model serving, consented training-data custody, candidate training and real
   held-out behavioral or causal evaluation.

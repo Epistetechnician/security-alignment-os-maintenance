@@ -52,6 +52,15 @@
   ],
   "external_references": [
     {
+      "package": "ed25519-dalek",
+      "version": "2.2.0",
+      "license": "BSD-3-Clause",
+      "source": "crates.io registry",
+      "lockfile": "Cargo.lock",
+      "lockfile_sha256": "d8b31fdece03ab4bba310accfd013cb95d750da6d8a8ebfd28eb5f18bcf91b03",
+      "treatment": "Pinned signing and verification dependency; no external application code copied"
+    },
+    {
       "url": "https://modelcontextprotocol.io/specification/2025-11-25/server/tools",
       "version": "2025-11-25",
       "treatment": "Tool identity and list-change design reference; no SDK/code imported"

@@ -9,8 +9,8 @@ financial, deployment, or scientific gates.
 
 | 841 phase | Current implementation | Exit status |
 | --- | --- | --- |
-| 0. Contract | `contract`, threat model, claim ceiling, explicit lifecycle transitions, authority lattice, and failure budgets | Partial; formal review and machine-checked proof remain open |
-| 1. Security kernel | `Kernel`, single-use capabilities, quotas, canonical journal, atomic replacement/recovery, runtime rollback/freeze/kill, independent local checker, and fault scenarios | Partial; signed receipts, external kill, OS sandbox, egress, secrets, crash injection, and model checking remain open |
+| 0. Contract | `contract`, `schema`, threat model, claim ceiling, explicit lifecycle transitions, authority lattice, failure budgets, and exhaustive digest-only property reports | Partial; formal review and machine-checked proof remain open |
+| 1. Security kernel | `Kernel`, single-use capabilities, quotas, canonical journal, atomic replacement/recovery, runtime rollback/freeze/kill, independent local checker, fault scenarios, Ed25519 capability receipts, and a typed execution gate | Partial; external kill, OS sandbox, egress, secrets, crash injection, persistent trust, and model checking remain open |
 | 2. Evidence plane | `EvidenceRegistry` plus `artifacts::ArtifactManifest` and quarantine/accept/revoke lifecycle | Partial; authenticated identities, custody verification/deletion, and public release packets remain open |
 | 3. Security benchmark | Eight local denial families over fit/tune/assessment labels and digest-only fault outcomes | Fixture only; held-out families and independent runners remain open |
 | 4. Alignment research | `alignment::PredictionLock` contract only | Design only; no model execution or causal/behavioral evidence |
@@ -29,11 +29,11 @@ wallet, or settlement transaction is integrated.
 ## Parallel structure
 
 The code is now split into Rust module seams corresponding to the plan's
-workstreams: kernel, evidence/artifacts, benchmark/faults, alignment, and
-runtime/adapters. The current checkout does not claim that those seams are
-independent production services or independent scientific validators. The
-coordinator gate is the Cargo test, Clippy, format, and digest review over the
-combined local tree.
+workstreams: kernel/contract/receipts, evidence/artifacts, benchmark/faults,
+alignment, and runtime/adapters/execution-gate. The current checkout does not
+claim that those seams are independent production services or independent
+scientific validators. The coordinator gate is the Cargo test, Clippy, format,
+and digest review over the combined local tree.
 
 ## Claim ceiling
 

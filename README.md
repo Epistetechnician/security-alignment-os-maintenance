@@ -48,6 +48,10 @@ JavaScript runtime dependencies are installed.
 | `EvidenceRegistry` | Subject-bound evidence, distinct local review roles, freshness, and revocation |
 | `artifacts` | Quarantined artifact manifests with subject/source/provenance digests, retention, review, and revocation |
 | `contract` | Explicit capability lattice, lifecycle transitions, and caller-owned failure budgets |
+| `property` | Exhaustive local lattice/lifecycle checks and digest-only invariant reports |
+| `receipts` | Ed25519-signed capability receipts with exact decision binding and local replay rejection |
+| `execution_gate` | Typed sandbox/request boundary that validates controls and remains blocked locally |
+| `schema` | Versioned schema identities with exact digest-bound lookup |
 | `Runtime`, `AuditJournal` | Reversible dictionary actions, terminal freeze/kill, and digest-chained audit persistence |
 | `specialist`, `memory` | Immutable identities, revocation, tenant consent, retrieval, redacted telemetry, and canonical durable memory |
 | `integration` | Evidence-bound workflow execution, observation, rollback, and freeze disposition |
@@ -78,6 +82,10 @@ The local tests do not satisfy those gates.
 - [Evidence and evaluation](docs/evidence-evaluation-v1.md)
 - [Artifact manifests](docs/artifacts-v1.md)
 - [Phase 0 contract](docs/phase0-contract-v1.md)
+- [Deterministic property checks](docs/property-checks-v1.md)
+- [Signed capability receipts](docs/receipts-v1.md)
+- [External execution gate](docs/execution-gate-v1.md)
+- [Schema registry](docs/schema-v1.md)
 - [Fault injection](docs/fault-injection-v1.md)
 - [Plan conformance](docs/plan-conformance-v1.md)
 - [Runtime and specialist](docs/runtime-v1.md)

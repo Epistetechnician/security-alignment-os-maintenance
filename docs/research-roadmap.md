@@ -43,11 +43,14 @@ closed until those gates are independently satisfied.
 ## Local implementation status after parallel build
 
 The local kernel, canonical journal persistence/recovery, explicit capability
-lattice, failure budgets, artifact-manifest lifecycle, evidence lifecycle,
-measurement locks, dictionary rollback, specialist consent/retrieval, ordinary
-fixed-job receipts, release-state contracts, independent local checks, and
-fault-injection scenarios are implemented. External enforcement, authenticated
-custody, scientific assessment, training and deployment remain the gates above.
+lattice, failure budgets, versioned schema registry, exhaustive property checks,
+signed capability receipts, typed execution gate, artifact-manifest lifecycle,
+evidence
+lifecycle, measurement locks, dictionary rollback, specialist
+consent/retrieval, ordinary fixed-job receipts, release-state contracts,
+independent local checks, and fault-injection scenarios are implemented.
+External enforcement, authenticated custody, scientific assessment, training
+and deployment remain the gates above.
 Public fixture split names are organizational labels, not independent held-out
 data. See [plan-conformance-v1.md](plan-conformance-v1.md) for phase-by-phase
 status and [integration-v1.md](integration-v1.md) for the exact boundaries.

@@ -47,8 +47,10 @@ These families test control-plane behavior only. They are not held-out model
 evidence, causal alignment evidence, general safety evidence, or production
 readiness evidence.
 
-`checker::validate_replay`, `validate_audit`, and `validate_receipt` recompute
-public record equations independently of producer validators. They are local
+`checker::validate_replay`, `validate_audit`, `validate_receipt`, and
+`validate_capability_receipt` recompute public record equations independently
+of producer validators. The capability-receipt check also verifies the
+Ed25519 signature over the canonical receipt payload. These are local
 consistency checks; they do not authenticate a reviewer, prove custody, or
 verify an external execution environment.
 

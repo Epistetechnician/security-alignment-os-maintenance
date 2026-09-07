@@ -88,8 +88,7 @@ fail-closed lifecycle transition.
 ## Validation
 
 The module has unit tests for lattice laws and non-implication, invalid
-transitions, one-way freeze/kill behavior, and failure-budget validation. Once
-the coordinator exports `contract` from `src/lib.rs`, run:
+transitions, one-way freeze/kill behavior, and failure-budget validation. Run:
 
 ```text
 cargo fmt --all -- --check
@@ -97,5 +96,10 @@ cargo test --all-targets
 cargo clippy --all-targets -- -D warnings
 ```
 
-The current module intentionally does not modify `src/lib.rs`; integration and
-cross-module wiring remain coordinator-owned work.
+`property::run_all()` independently enumerates the 72 lifecycle pairs, all
+256 lattice elements and 65,536 ordered lattice pairs, plus the local kernel
+invariants. It returns a digest-only report and is a regression check rather
+than a formal proof.
+
+Cross-module wiring is exported through `src/lib.rs`; integration remains
+coordinator-owned work.

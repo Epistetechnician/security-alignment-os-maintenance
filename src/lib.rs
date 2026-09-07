@@ -22,11 +22,15 @@ pub mod audit;
 pub mod benchmark;
 pub mod checker;
 pub mod contract;
+pub mod execution_gate;
 pub mod faults;
 pub mod governance;
 pub mod integration;
 pub mod market;
 pub mod memory;
+pub mod property;
+pub mod receipts;
+pub mod schema;
 pub mod specialist;
 
 pub const STATE_SLICE: &str = "security-alignment-os-foundation-v1";

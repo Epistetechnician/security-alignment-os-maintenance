@@ -737,6 +737,27 @@ pub struct Evidence {
 }
 
 impl Evidence {
+    pub fn validate(&self) -> Result<()> {
+        let valid_role =
+            |role: &str| !role.is_empty() && !role.chars().any(|character| character.is_control());
+        if self.id.is_empty()
+            || self.id.chars().any(|character| character.is_control())
+            || !valid_digest(&self.source_digest)
+            || !valid_role(&self.operator_id)
+            || !valid_role(&self.validator_id)
+            || self.operator_id == self.validator_id
+            || self.valid_until == 0
+            || (self.accepted
+                && (!valid_role(&self.reviewer_id)
+                    || self.reviewer_id == self.operator_id
+                    || self.reviewer_id == self.validator_id))
+            || (!self.accepted && !self.reviewer_id.is_empty())
+        {
+            return Err(Error::Invalid("invalid evidence identity".into()));
+        }
+        Ok(())
+    }
+
     fn valid(&self, now: u64, subject: &str) -> bool {
         self.accepted
             && !self.revoked
@@ -751,31 +772,29 @@ impl Evidence {
     }
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 pub struct EvidenceRegistry {
     records: BTreeMap<String, Evidence>,
 }
 
 impl EvidenceRegistry {
-    pub fn insert(&mut self, evidence: Evidence) -> Result<()> {
-        if evidence.id.is_empty()
-            || !valid_digest(&evidence.source_digest)
-            || evidence.operator_id.is_empty()
-            || evidence.validator_id.is_empty()
-            || evidence.operator_id == evidence.validator_id
-            || evidence.valid_until == 0
-            || (evidence.accepted
-                && (evidence.reviewer_id.is_empty()
-                    || evidence.reviewer_id == evidence.operator_id
-                    || evidence.reviewer_id == evidence.validator_id))
-            || (!evidence.accepted && !evidence.reviewer_id.is_empty())
-        {
-            return Err(Error::Invalid("invalid evidence identity".into()));
+    pub fn validate(&self) -> Result<()> {
+        for (id, evidence) in &self.records {
+            if id != &evidence.id {
+                return Err(Error::Invalid("evidence registry key mismatch".into()));
+            }
+            evidence.validate()?;
         }
+        Ok(())
+    }
+
+    pub fn insert(&mut self, evidence: Evidence) -> Result<()> {
+        evidence.validate()?;
         if self.records.contains_key(&evidence.id) {
             return Err(Error::Rejected("evidence identity already exists".into()));
         }
         self.records.insert(evidence.id.clone(), evidence);
+        self.validate()?;
         Ok(())
     }
     pub fn accept(&mut self, id: &str, reviewer: &str) -> Result<()> {
@@ -784,6 +803,7 @@ impl EvidenceRegistry {
             .get_mut(id)
             .ok_or_else(|| Error::Quarantined("missing evidence".into()))?;
         if reviewer.is_empty()
+            || reviewer.chars().any(|character| character.is_control())
             || evidence.revoked
             || evidence.accepted
             || reviewer == evidence.operator_id
@@ -793,16 +813,55 @@ impl EvidenceRegistry {
         }
         evidence.reviewer_id = reviewer.into();
         evidence.accepted = true;
+        evidence.validate()?;
         Ok(())
     }
     pub fn is_valid(&self, id: &str, now: u64, subject: &str) -> bool {
         valid_digest(subject) && self.records.get(id).is_some_and(|e| e.valid(now, subject))
     }
     pub fn revoke(&mut self, id: &str) -> Result<()> {
-        self.records
+        let evidence = self
+            .records
             .get_mut(id)
-            .ok_or_else(|| Error::Invalid("unknown evidence".into()))
-            .map(|e| e.revoked = true)
+            .ok_or_else(|| Error::Invalid("unknown evidence".into()))?;
+        if evidence.revoked {
+            return Err(Error::Rejected("evidence is already revoked".into()));
+        }
+        evidence.revoked = true;
+        self.validate()
+    }
+
+    pub fn save(&self, path: &Path) -> Result<()> {
+        self.validate()?;
+        let temporary = path.with_extension("tmp");
+        fs::write(&temporary, canonical_bytes(self)?)?;
+        fs::rename(temporary, path)?;
+        Ok(())
+    }
+
+    pub fn load(path: &Path) -> Result<Self> {
+        let bytes = fs::read(path)?;
+        let registry: Self = serde_json::from_slice(&bytes)?;
+        if canonical_bytes(&registry)? != bytes {
+            return Err(Error::Journal(
+                "evidence bytes are not canonical JSON".into(),
+            ));
+        }
+        registry.validate()?;
+        Ok(registry)
+    }
+
+    pub fn recover(path: &Path) -> Result<Self> {
+        match Self::load(path) {
+            Ok(registry) => Ok(registry),
+            Err(Error::Persistence(error)) if error.kind() == std::io::ErrorKind::NotFound => {
+                let temporary = path.with_extension("tmp");
+                let registry = Self::load(&temporary)?;
+                fs::rename(temporary, path)?;
+                Ok(registry)
+            }
+            Err(error) => Err(error),
+        }
     }
 }
 
@@ -905,6 +964,42 @@ mod tests {
             run_local_workflow(&mut kernel, &mut runtime, &evidence, "e", &p, 10),
             Err(Error::Journal(_))
         ));
+    }
+
+    #[test]
+    fn evidence_registry_snapshot_is_canonical_and_recoverable() {
+        let mut registry = EvidenceRegistry::default();
+        registry
+            .insert(Evidence {
+                id: "persisted-evidence".into(),
+                source_digest: "a".repeat(64),
+                operator_id: "operator".into(),
+                validator_id: "validator".into(),
+                reviewer_id: "reviewer".into(),
+                valid_until: 100,
+                accepted: true,
+                revoked: false,
+            })
+            .unwrap();
+        let directory = tempdir().unwrap();
+        let path = directory.path().join("evidence.json");
+        registry.save(&path).unwrap();
+        assert_eq!(EvidenceRegistry::load(&path).unwrap(), registry);
+        let mut bytes = std::fs::read(&path).unwrap();
+        let tamper_index = bytes.len() - 2;
+        bytes[tamper_index] = b' ';
+        std::fs::write(&path, bytes).unwrap();
+        assert!(EvidenceRegistry::load(&path).is_err());
+        std::fs::write(
+            path.with_extension("tmp"),
+            canonical_bytes(&registry).unwrap(),
+        )
+        .unwrap();
+        std::fs::remove_file(&path).unwrap();
+        assert_eq!(EvidenceRegistry::recover(&path).unwrap(), registry);
+        let mut revoked_registry = registry;
+        assert!(revoked_registry.revoke("persisted-evidence").is_ok());
+        assert!(revoked_registry.revoke("persisted-evidence").is_err());
     }
 
     #[test]

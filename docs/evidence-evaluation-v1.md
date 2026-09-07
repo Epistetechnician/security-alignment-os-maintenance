@@ -27,6 +27,10 @@ assert!(registry.is_valid("evidence-id", now, &subject_digest));
 three distinct non-empty local role assertions. These identities are caller
 inputs; no external reviewer or signature is authenticated.
 
+`EvidenceRegistry::validate` checks persisted key/ID and lifecycle bindings.
+`save`, `load`, and `recover` use canonical JSON and temporary-file promotion;
+they validate local persistence but do not authenticate custody or reviewers.
+
 ## Prediction lock
 
 `alignment::PredictionLock` hashes protocol, prediction and configuration

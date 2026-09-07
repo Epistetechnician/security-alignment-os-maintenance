@@ -59,6 +59,10 @@ digests without raw payloads. Both remain caller-owned local records.
 `checker` independently recomputes replay, audit and fixed-receipt invariants
 for local regression. Its result is not independent acceptance evidence.
 
+`EvidenceRegistry` snapshots can be saved, loaded, and recovered through a
+canonical temporary-file boundary. Accepted/revoked records are revalidated
+on every load, including subject, role, and lifecycle fields.
+
 `receipts::ReceiptSigner` can issue an Ed25519 signature over a capability
 receipt only after proposal, decision, policy, capability, subject, and
 validity bindings recompute exactly. `receipts::ReceiptVerifier` checks the

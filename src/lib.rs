@@ -1785,6 +1785,10 @@ mod tests {
         let mut expired = offers[0].clone();
         expired.expires_at = 20;
         assert!(market::select_offer(&job, &[expired], 20).is_err());
+        assert!(matches!(
+            market::select_offer(&job, &[], 20),
+            Err(Error::Quarantined(_))
+        ));
 
         let mut tampered_job = job.clone();
         tampered_job.input_commitment = "e".repeat(64);

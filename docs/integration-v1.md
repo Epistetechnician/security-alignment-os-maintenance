@@ -45,6 +45,12 @@ timestamp, role, and manifest bindings before `save` or after `load`;
 `recover` promotes only a valid temporary snapshot when the primary is absent.
 This is persistence validation, not proof of external custody or deletion.
 
+`custody::CustodyRegistry` records an owner-declared external `0700` root,
+bounded raw-retention interval, exact artifact digest, validator assertion, and
+terminal owner deletion record. `claims::ClaimEnvelope` composes evidence by
+meet only, while `AggregateReleasePacket` retains claim IDs and evidence
+digests without raw payloads. Both remain caller-owned local records.
+
 `checker` independently recomputes replay, audit and fixed-receipt invariants
 for local regression. Its result is not independent acceptance evidence.
 

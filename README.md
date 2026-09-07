@@ -44,9 +44,11 @@ JavaScript runtime dependencies are installed.
 | Module | Implemented behavior |
 | --- | --- |
 | `Kernel`, `ReplayJournal` | Exact issuer/candidate/policy binding, claim expiry, budgets, single-use execution, and atomic journal persistence |
-| `checker` | Independent local recomputation of replay, audit, and fixed-receipt invariants |
+| `checker` | Independent local recomputation of replay, audit, fixed-job, and signed-capability receipt invariants |
 | `EvidenceRegistry` | Subject-bound evidence, distinct local review roles, freshness, and revocation |
 | `artifacts` | Quarantined artifact manifests with subject/source/provenance digests, retention, review, revocation, and canonical persistence/recovery |
+| `custody` | Owner-declared external custody and bounded retention records with canonical recovery |
+| `claims` | Meet-only claim envelopes and digest-only aggregate release packets |
 | `contract` | Explicit capability lattice, lifecycle transitions, and caller-owned failure budgets |
 | `property` | Exhaustive local lattice/lifecycle checks and digest-only invariant reports |
 | `receipts` | Ed25519-signed capability receipts with exact decision binding and local replay rejection |
@@ -81,6 +83,8 @@ The local tests do not satisfy those gates.
 - [Kernel](docs/kernel-v1.md)
 - [Evidence and evaluation](docs/evidence-evaluation-v1.md)
 - [Artifact manifests](docs/artifacts-v1.md)
+- [Custody records](docs/custody-v1.md)
+- [Claim envelopes](docs/claims-v1.md)
 - [Phase 0 contract](docs/phase0-contract-v1.md)
 - [Deterministic property checks](docs/property-checks-v1.md)
 - [Signed capability receipts](docs/receipts-v1.md)

@@ -45,7 +45,7 @@ closed until those gates are independently satisfied.
 The local kernel, canonical journal persistence/recovery, explicit capability
 lattice, failure budgets, versioned schema registry, exhaustive property checks,
 signed capability receipts, typed execution gate, artifact-manifest lifecycle,
-evidence
+custody records, meet-only claim envelopes, evidence
 lifecycle, measurement locks, dictionary rollback, specialist
 consent/retrieval, ordinary fixed-job receipts, release-state contracts,
 independent local checks, and fault-injection scenarios are implemented.

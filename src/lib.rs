@@ -1707,11 +1707,14 @@ mod tests {
         fs::write(verifier_path.with_extension("tmp"), canonical).unwrap();
         fs::remove_file(&verifier_path).unwrap();
         let mut restored = market::ReceiptVerifier::recover(&verifier_path).unwrap();
-        assert!(
-            !restored.propose_settlement(&job, &receipt, 12).unwrap()["executed"]
-                .as_bool()
-                .unwrap()
+        let settlement = restored.propose_settlement(&job, &receipt, 12).unwrap();
+        assert_eq!(settlement.provider, receipt.provider);
+        assert_eq!(settlement.price, receipt.price);
+        assert_eq!(
+            settlement.status,
+            market::SettlementStatus::AuthorizationRequired
         );
+        settlement.validate(&job, &receipt).unwrap();
         assert!(restored.propose_settlement(&job, &receipt, 12).is_err());
         let overflowing = market::SumJob::new(
             "overflow".into(),

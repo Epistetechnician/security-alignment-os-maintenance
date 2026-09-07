@@ -153,6 +153,38 @@ pub struct SumOffer {
     pub expires_at: u64,
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub enum SettlementStatus {
+    AuthorizationRequired,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct SettlementProposal {
+    pub job_digest: String,
+    pub receipt_digest: String,
+    pub provider: String,
+    pub price: u64,
+    pub status: SettlementStatus,
+}
+
+impl SettlementProposal {
+    pub fn validate(&self, job: &SumJob, receipt: &SumReceipt) -> Result<()> {
+        job.validate()?;
+        receipt.validate(job, receipt.completed_at)?;
+        if self.job_digest != job.digest()?
+            || self.receipt_digest != digest(receipt)?
+            || self.provider != receipt.provider
+            || self.price != receipt.price
+            || self.status != SettlementStatus::AuthorizationRequired
+        {
+            return Err(Error::Rejected(
+                "settlement proposal binding mismatch".into(),
+            ));
+        }
+        Ok(())
+    }
+}
+
 impl SumOffer {
     pub fn new(
         job: &SumJob,
@@ -367,7 +399,7 @@ impl ReceiptVerifier {
         job: &SumJob,
         receipt: &SumReceipt,
         now: u64,
-    ) -> Result<serde_json::Value> {
+    ) -> Result<SettlementProposal> {
         let receipt_digest = digest(receipt)?;
         if receipt.validate(job, now).is_err()
             || now >= job.deadline
@@ -378,8 +410,14 @@ impl ReceiptVerifier {
                 "receipt is unverified, expired, or replayed".into(),
             ));
         }
-        Ok(
-            serde_json::json!({"job_digest": job.digest()?, "receipt_digest": receipt_digest, "executed": false, "authorization_required": true}),
-        )
+        let proposal = SettlementProposal {
+            job_digest: job.digest()?,
+            receipt_digest,
+            provider: receipt.provider.clone(),
+            price: receipt.price,
+            status: SettlementStatus::AuthorizationRequired,
+        };
+        proposal.validate(job, receipt)?;
+        Ok(proposal)
     }
 }

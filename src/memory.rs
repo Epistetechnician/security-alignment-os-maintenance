@@ -67,12 +67,22 @@ fn validate_record(record: &MemoryRecord) -> Result<()> {
 impl PersistentMemory {
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
         let path = path.as_ref().to_path_buf();
-        if !path.exists() {
-            return Ok(Self {
-                path,
-                records: BTreeMap::new(),
-            });
+        if path.exists() {
+            return Self::load_existing(path);
         }
+        let temporary = path.with_extension("tmp");
+        if temporary.exists() {
+            let memory = Self::load_existing(temporary)?;
+            fs::rename(&memory.path, &path)?;
+            return Ok(Self { path, ..memory });
+        }
+        Ok(Self {
+            path,
+            records: BTreeMap::new(),
+        })
+    }
+
+    fn load_existing(path: PathBuf) -> Result<Self> {
         let bytes = fs::read(&path)?;
         let document: MemoryDocument = serde_json::from_slice(&bytes)?;
         if document.version != FORMAT_VERSION || canonical_bytes(&document)? != bytes {
@@ -93,6 +103,17 @@ impl PersistentMemory {
             }
         }
         Ok(Self { path, records })
+    }
+
+    pub fn recover(path: impl AsRef<Path>) -> Result<Self> {
+        let path = path.as_ref();
+        if path.exists() || path.with_extension("tmp").exists() {
+            return Self::open(path);
+        }
+        Ok(Self {
+            path: path.to_path_buf(),
+            records: BTreeMap::new(),
+        })
     }
 
     fn check_consent(
@@ -185,6 +206,9 @@ impl PersistentMemory {
     }
 
     pub fn save(&self) -> Result<()> {
+        for record in self.records.values() {
+            validate_record(record)?;
+        }
         let document = MemoryDocument {
             version: FORMAT_VERSION,
             records: self.records.values().cloned().collect(),

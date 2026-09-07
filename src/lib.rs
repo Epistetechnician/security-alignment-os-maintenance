@@ -1345,6 +1345,14 @@ mod tests {
             memory.retrieve(&registry, &grant, "note", 1).unwrap(),
             value
         );
+        let canonical = fs::read(&path).unwrap();
+        fs::write(path.with_extension("tmp"), canonical).unwrap();
+        fs::remove_file(&path).unwrap();
+        let memory = memory::PersistentMemory::recover(&path).unwrap();
+        assert_eq!(
+            memory.retrieve(&registry, &grant, "note", 1).unwrap(),
+            value
+        );
         assert!(memory.retrieve(&registry, &grant, "missing", 1).is_err());
         assert!(memory.retrieve(&registry, &grant, "note", 100).is_err());
         let forged = specialist::ConsentGrant {

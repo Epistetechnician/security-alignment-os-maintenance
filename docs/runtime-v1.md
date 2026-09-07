@@ -17,7 +17,9 @@ the role and identity fields remain caller assertions.
 `TenantRetrieval` stores local records under `(tenant, resource)` and requires a
 registered, non-revoked specialist plus an active, resource-scoped
 `ConsentGrant`. `memory::PersistentMemory` adds canonical caller-owned file
-persistence with the same checks and a digest for each value.
+persistence with the same checks and a digest for each value. `open` and
+`recover` validate a primary snapshot or promote a validated temporary
+snapshot after a crash; malformed primary bytes are never silently replaced.
 
 `ToolRegistry` binds tool ID/version, implementation digest and a canonical
 sorted manifest-list digest. `freeze` captures the list digest and

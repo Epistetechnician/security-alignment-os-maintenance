@@ -77,7 +77,9 @@ zero-knowledge, FHE, or MPC workload runs.
 `governance::ReleaseRegistry` preserves an immutable base and rollback target.
 Shadow and canary advances require the candidate's first evidence digest, then a
 distinct lowercase digest for the next phase. `freeze` is terminal metadata; it
-does not deploy an adapter or authorize an external executor.
+does not deploy an adapter or authorize an external executor. Registry
+snapshots validate candidate identity, phase evidence cardinality, and
+canonical bytes before save/load/recovery.
 
 `specialist::ToolRegistry` binds tool ID/version, implementation digest and a
 canonical manifest-list digest. `adapters::AdapterPlan` validates the shape of

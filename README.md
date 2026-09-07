@@ -58,7 +58,7 @@ JavaScript runtime dependencies are installed.
 | `specialist`, `memory` | Immutable identities, revocation, tenant consent, retrieval, redacted telemetry, and canonical durable memory |
 | `integration` | Evidence-bound workflow execution, receipt-gated execution, observation, rollback, and freeze disposition |
 | `market` | Fixed local sum, result recomputation, binding/timeout/replay checks, and unexecuted settlement proposal |
-| `governance` | Shadow/canary/local-release records with immutable base and phase evidence |
+| `governance` | Shadow/canary/local-release records with immutable base, phase evidence, lifecycle validation, and canonical persistence/recovery |
 | `faults` | Deterministic replay, stale-clock, stale-policy, malformed-bytes, partial-write, and kill/freeze scenarios |
 
 ## Boundaries

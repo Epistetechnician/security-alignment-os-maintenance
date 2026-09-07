@@ -14,11 +14,14 @@ use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
+use std::fs;
+use std::path::Path;
 
 const RECEIPT_VERSION: u8 = 1;
 const SIGNATURE_LEN: usize = 64;
 const KEY_LEN: usize = 32;
 const MAX_TEXT_LEN: usize = 256;
+const VERIFIER_FORMAT_VERSION: u8 = 1;
 
 fn valid_text(value: &str) -> bool {
     !value.is_empty() && value.len() <= MAX_TEXT_LEN && !value.chars().any(char::is_control)
@@ -351,8 +354,16 @@ impl ReceiptSigner {
     }
 }
 
-/// Local verifier with an explicit trusted-key map and a process-local replay
-/// set. It has no network, persistent trust store, or host identity source.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+struct VerifierDocument {
+    version: u8,
+    trusted_keys: BTreeMap<String, Vec<u8>>,
+    verified: BTreeSet<String>,
+}
+
+/// Local verifier with an explicit trusted-key map and replay set. Trust and
+/// replay state can be persisted by the caller, but the file remains
+/// unauthenticated caller-owned storage.
 pub struct ReceiptVerifier {
     trusted_keys: BTreeMap<String, VerifyingKey>,
     verified: BTreeSet<String>,
@@ -393,7 +404,81 @@ impl ReceiptVerifier {
             return Err(Error::Rejected("issuer key ID already registered".into()));
         }
         self.trusted_keys.insert(key_id, key);
+        self.validate()?;
         Ok(())
+    }
+
+    pub fn validate(&self) -> Result<()> {
+        for (key_id, key) in &self.trusted_keys {
+            if !valid_key_id(key_id) || VerifyingKey::from_bytes(&key.to_bytes()).is_err() {
+                return Err(Error::Invalid(
+                    "receipt verifier key registry is malformed".into(),
+                ));
+            }
+        }
+        if self
+            .verified
+            .iter()
+            .any(|receipt_id| !valid_digest(receipt_id))
+        {
+            return Err(Error::Invalid(
+                "receipt verifier replay set is malformed".into(),
+            ));
+        }
+        Ok(())
+    }
+
+    fn document(&self) -> VerifierDocument {
+        VerifierDocument {
+            version: VERIFIER_FORMAT_VERSION,
+            trusted_keys: self
+                .trusted_keys
+                .iter()
+                .map(|(key_id, key)| (key_id.clone(), key.to_bytes().to_vec()))
+                .collect(),
+            verified: self.verified.clone(),
+        }
+    }
+
+    pub fn save(&self, path: &Path) -> Result<()> {
+        self.validate()?;
+        let temporary = path.with_extension("tmp");
+        fs::write(&temporary, canonical_bytes(&self.document())?)?;
+        fs::rename(temporary, path)?;
+        Ok(())
+    }
+
+    pub fn load(path: &Path) -> Result<Self> {
+        let bytes = fs::read(path)?;
+        let document: VerifierDocument = serde_json::from_slice(&bytes)?;
+        if document.version != VERIFIER_FORMAT_VERSION || canonical_bytes(&document)? != bytes {
+            return Err(Error::Journal(
+                "receipt verifier bytes are not canonical JSON".into(),
+            ));
+        }
+        let mut verifier = Self::new();
+        for (key_id, bytes) in document.trusted_keys {
+            let public_key: [u8; KEY_LEN] = bytes
+                .try_into()
+                .map_err(|_| Error::Invalid("issuer public key is malformed".into()))?;
+            verifier.register_key(key_id, public_key)?;
+        }
+        verifier.verified = document.verified;
+        verifier.validate()?;
+        Ok(verifier)
+    }
+
+    pub fn recover(path: &Path) -> Result<Self> {
+        match Self::load(path) {
+            Ok(verifier) => Ok(verifier),
+            Err(Error::Persistence(error)) if error.kind() == std::io::ErrorKind::NotFound => {
+                let temporary = path.with_extension("tmp");
+                let verifier = Self::load(&temporary)?;
+                fs::rename(temporary, path)?;
+                Ok(verifier)
+            }
+            Err(error) => Err(error),
+        }
     }
 
     pub fn verified_count(&self) -> usize {
@@ -622,5 +707,39 @@ mod tests {
         assert!(verifier
             .register_key(signer.key_id(), signer.verifying_key_bytes())
             .is_err());
+    }
+
+    #[test]
+    fn verifier_snapshot_preserves_trust_and_replay_state() {
+        let (proposal, policy, decision) = fixture();
+        let signer = signer();
+        let receipt = signer
+            .issue("tenant-1", &proposal, &decision, &policy)
+            .expect("receipt");
+        let mut verifier = ReceiptVerifier::with_key(signer.key_id(), signer.verifying_key_bytes())
+            .expect("verifier");
+        verifier
+            .verify(&receipt, "tenant-1", &proposal, &decision, &policy, 100)
+            .expect("verification");
+
+        let directory = tempfile::tempdir().expect("directory");
+        let path = directory.path().join("receipt-verifier.json");
+        verifier.save(&path).expect("save");
+        let mut restored = ReceiptVerifier::load(&path).expect("load");
+        assert_eq!(restored.verified_count(), 1);
+        assert!(restored
+            .verify(&receipt, "tenant-1", &proposal, &decision, &policy, 100)
+            .is_err());
+
+        let canonical = std::fs::read(&path).expect("canonical");
+        let mut tampered = canonical.clone();
+        let tamper_index = tampered.len() - 2;
+        tampered[tamper_index] = b' ';
+        std::fs::write(&path, tampered).expect("tamper");
+        assert!(ReceiptVerifier::load(&path).is_err());
+        std::fs::write(path.with_extension("tmp"), canonical).expect("temporary");
+        std::fs::remove_file(&path).expect("remove primary");
+        let recovered = ReceiptVerifier::recover(&path).expect("recover");
+        assert_eq!(recovered.verified_count(), 1);
     }
 }

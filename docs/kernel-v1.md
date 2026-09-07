@@ -31,8 +31,9 @@ for rejected over-budget and malformed uses. Zero-cost use is still single-use.
 
 Admission rejects non-integer resource values and timestamps, uppercase or
 malformed SHA-256 digests, stale required claims, and required claims that
-explicitly exclude their own guarantee. Expiry is exclusive: execution at or
-after the token or claim expiry is invalid.
+explicitly exclude their own guarantee. Capability use requires
+`issued_at <= now < expires_at`; backward-clock use before issuance and use at
+or after expiry are invalid.
 
 The journal persists canonical JSON with SHA-256 chain entries. Loading requires
 canonical bytes, contiguous sequence numbers, lowercase digest fields, a valid

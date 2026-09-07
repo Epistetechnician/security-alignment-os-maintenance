@@ -20,20 +20,23 @@ canonical shape, receipt identity, subject equality, signature, freshness,
 accepted-decision status, all four digests, and exact agent/action/scope
 bindings. It records a receipt ID only after every check passes; a second
 verification in the same verifier is rejected as replay. Key registration is
-local and duplicate key IDs are rejected.
+local and duplicate key IDs are rejected. `validate`, `save`, `load`, and
+`recover` cover the trusted-key and replay sets with canonical JSON and a
+validated temporary-file promotion path.
 
 `checker::validate_capability_receipt` independently recomputes the receipt
 identity, decision bindings, validity window, and Ed25519 signature without
 calling `ReceiptVerifier`. It accepts a caller-provided public key and does not
-provide a durable trust or replay store.
+replace independent trust in the persisted verifier snapshot.
 
 The module is pure Rust and has no provider, network, model, host-attestation,
-OS sandbox, persistent trust-store, or distributed replay protection. A valid
+OS sandbox, authenticated storage, or distributed replay protection. A valid
 signature proves possession of the registered local signing key over the
 receipt payload. It does not prove that the capability was honored, that an
 execution occurred, that inputs were truthful, or that the signer is an
-independent authority. The caller must persist and protect the trusted-key
-registry and verified set if those properties are required beyond one process.
+independent authority. The caller must protect the persisted trusted-key
+registry and verified set; canonical persistence detects accidental tampering
+but does not authenticate the storage owner.
 
 The `receipts` module is exported from `src/lib.rs`. Validation is:
 

@@ -580,6 +580,7 @@ impl Kernel {
             || decision.policy_digest != issuance.policy_digest
             || decision.policy_digest != current_policy_digest
             || decision.capability.as_ref() != Some(&issuance.capability)
+            || now < issuance.capability.issued_at
             || issuance.capability.expires_at <= now
         {
             return Ok(false);
@@ -699,7 +700,8 @@ impl Runtime {
             .capability
             .as_ref()
             .ok_or_else(|| Error::Rejected("accepted decision lacks capability".into()))?;
-        if capability.expires_at <= now
+        if now < capability.issued_at
+            || capability.expires_at <= now
             || capability.agent_id != proposal.agent_id
             || capability.action != proposal.action
             || capability.scope != proposal.scope
@@ -1150,6 +1152,31 @@ mod tests {
             .token_id = "f".repeat(64);
         assert!(runtime.execute(&mut kernel, &p, &tampered, 10).is_err());
         assert!(runtime.execute(&mut kernel, &p, &decision, 10).unwrap());
+    }
+
+    #[test]
+    fn backward_clock_cannot_consume_capability_before_issuance() {
+        let mut kernel = Kernel::new(Policy::default()).unwrap();
+        let mut runtime = Runtime::default();
+        let proposal = Proposal {
+            claims: vec![Claim {
+                valid_until: 200,
+                ..claim()
+            }],
+            expires_at: 200,
+            ..proposal("backward-clock")
+        };
+        let decision = kernel.admit(&proposal, 100).unwrap();
+        let before_state = runtime.state.clone();
+        let before_audit = runtime.audit.clone();
+        assert!(runtime
+            .execute(&mut kernel, &proposal, &decision, 50)
+            .is_err());
+        assert_eq!(runtime.state, before_state);
+        assert_eq!(runtime.audit, before_audit);
+        assert!(runtime
+            .execute(&mut kernel, &proposal, &decision, 100)
+            .unwrap());
     }
 
     #[test]

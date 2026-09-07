@@ -100,7 +100,8 @@ authenticate the host or make the signer independent.
 the exact input commitment, output schema, ordinary receipt type, privacy
 requirement, price ceiling, deadline, and immutable program identity. Typed
 `SumOffer` records bind to the exact job digest, fixed runtime and result
-commitment; selection is deterministic by price, provider, and offer ID.
+commitment; selection is deterministic by price, provider, and offer ID, while
+duplicate eligible offer IDs quarantine the job.
 `SumReceipt` carries the selected offer ID and runtime digest. A separate
 verifier recomputes the result, checks program/input/time/price/status bindings,
 rejects a repeated receipt digest, and permits one typed

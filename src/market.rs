@@ -250,10 +250,18 @@ impl SumOffer {
 }
 
 pub fn select_offer<'a>(job: &SumJob, offers: &'a [SumOffer], now: u64) -> Result<&'a SumOffer> {
-    let mut eligible = offers
-        .iter()
-        .filter(|offer| offer.validate(job, now).is_ok() && now < offer.expires_at)
-        .collect::<Vec<_>>();
+    let mut eligible = Vec::new();
+    let mut offer_ids = BTreeSet::new();
+    for offer in offers {
+        if offer.validate(job, now).is_ok() && now < offer.expires_at {
+            if !offer_ids.insert(offer.offer_id.clone()) {
+                return Err(Error::Quarantined(
+                    "duplicate eligible offer identity".into(),
+                ));
+            }
+            eligible.push(offer);
+        }
+    }
     eligible.sort_by(|left, right| {
         (left.price, &left.provider, &left.offer_id).cmp(&(
             right.price,

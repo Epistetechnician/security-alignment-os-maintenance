@@ -1831,6 +1831,12 @@ mod tests {
             market::SumOffer::new(&job, "offer-a".into(), "provider-a".into(), 5, 10, 90).unwrap(),
             market::SumOffer::new(&job, "offer-b".into(), "provider-b".into(), 3, 10, 90).unwrap(),
         ];
+        let duplicate =
+            market::SumOffer::new(&job, "offer-b".into(), "provider-c".into(), 2, 10, 90).unwrap();
+        assert!(matches!(
+            market::select_offer(&job, &[offers[1].clone(), duplicate], 20),
+            Err(Error::Quarantined(_))
+        ));
         let selected = market::select_offer(&job, &offers, 20).unwrap();
         assert_eq!(selected.provider, "provider-b");
         let receipt = market::execute_local_with_offer(&job, selected, 20).unwrap();

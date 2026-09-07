@@ -103,10 +103,10 @@ impl ReceiptVerifier {
             && receipt.output == checked_sum(&job.inputs)?
             && receipt.price <= job.max_price
             && valid_digest(&receipt.job_digest);
-        if valid {
-            self.verified.insert(digest(receipt)?);
+        if !valid {
+            return Ok(false);
         }
-        Ok(valid)
+        Ok(self.verified.insert(digest(receipt)?))
     }
     pub fn propose_settlement(
         &mut self,

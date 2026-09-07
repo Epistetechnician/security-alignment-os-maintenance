@@ -1102,6 +1102,7 @@ mod tests {
         let receipt = market::execute_local(&job, 10).unwrap();
         let mut verifier = market::ReceiptVerifier::default();
         assert!(verifier.verify(&job, &receipt, 11).unwrap());
+        assert!(!verifier.verify(&job, &receipt, 11).unwrap());
         checker::validate_receipt(&job, &receipt, 11).unwrap();
         assert!(
             !verifier.propose_settlement(&job, &receipt, 12).unwrap()["executed"]

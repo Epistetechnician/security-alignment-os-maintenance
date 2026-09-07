@@ -70,7 +70,8 @@ authenticate the host or make the signer independent.
 
 `market::SumJob` accepts one fixed non-negative integer-sum job class. A separate
 verifier recomputes the result, checks program/input/time/price/status bindings,
-and permits one unexecuted settlement proposal. No provider, wallet, chain,
+rejects a repeated receipt digest, and permits one unexecuted settlement
+proposal. No provider, wallet, chain,
 zero-knowledge, FHE, or MPC workload runs.
 
 `governance::ReleaseRegistry` preserves an immutable base and rollback target.

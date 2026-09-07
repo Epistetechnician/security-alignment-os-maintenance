@@ -57,7 +57,7 @@ JavaScript runtime dependencies are installed.
 | `Runtime`, `AuditJournal` | Reversible dictionary actions, terminal freeze/kill, and digest-chained audit persistence |
 | `specialist`, `memory` | Immutable identities, revocation, tenant consent, retrieval, redacted telemetry, and canonical durable memory |
 | `integration` | Evidence-bound workflow execution, receipt-gated execution, observation, rollback, and freeze disposition |
-| `market` | Fixed local sum, result recomputation, binding/timeout checks, and unexecuted settlement proposal |
+| `market` | Fixed local sum, result recomputation, binding/timeout/replay checks, and unexecuted settlement proposal |
 | `governance` | Shadow/canary/local-release records with immutable base and phase evidence |
 | `faults` | Deterministic replay, stale-clock, stale-policy, malformed-bytes, partial-write, and kill/freeze scenarios |
 

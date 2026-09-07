@@ -95,6 +95,8 @@ impl SumJob {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct SumReceipt {
     pub job_digest: String,
+    pub offer_id: String,
+    pub runtime_digest: String,
     pub program_digest: String,
     pub input_digest: String,
     pub output_schema_digest: String,
@@ -117,6 +119,12 @@ impl SumReceipt {
                 .chars()
                 .any(|character| character.is_control())
             || self.provider == job.requester
+            || self.offer_id.is_empty()
+            || self
+                .offer_id
+                .chars()
+                .any(|character| character.is_control())
+            || self.runtime_digest != runtime_digest()?
             || self.completed_at > now
             || now >= job.deadline
             || self.job_digest != job.digest()?
@@ -161,6 +169,7 @@ pub enum SettlementStatus {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct SettlementProposal {
     pub job_digest: String,
+    pub offer_id: String,
     pub receipt_digest: String,
     pub provider: String,
     pub price: u64,
@@ -172,6 +181,7 @@ impl SettlementProposal {
         job.validate()?;
         receipt.validate(job, receipt.completed_at)?;
         if self.job_digest != job.digest()?
+            || self.offer_id != receipt.offer_id
             || self.receipt_digest != digest(receipt)?
             || self.provider != receipt.provider
             || self.price != receipt.price
@@ -273,6 +283,8 @@ pub fn execute_local(job: &SumJob, now: u64) -> Result<SumReceipt> {
     let output = checked_sum(&job.inputs)?;
     Ok(SumReceipt {
         job_digest: job.digest()?,
+        offer_id: "local-direct-v1".into(),
+        runtime_digest: runtime_digest()?,
         program_digest: job.program_digest.clone(),
         input_digest: digest(&job.inputs)?,
         output_schema_digest: job.output_schema_digest.clone(),
@@ -299,6 +311,8 @@ pub fn execute_local_with_offer(job: &SumJob, offer: &SumOffer, now: u64) -> Res
     }
     Ok(SumReceipt {
         job_digest: job.digest()?,
+        offer_id: offer.offer_id.clone(),
+        runtime_digest: offer.runtime_digest.clone(),
         program_digest: job.program_digest.clone(),
         input_digest: digest(&job.inputs)?,
         output_schema_digest: job.output_schema_digest.clone(),
@@ -400,6 +414,40 @@ impl ReceiptVerifier {
         receipt: &SumReceipt,
         now: u64,
     ) -> Result<SettlementProposal> {
+        if receipt.offer_id != "local-direct-v1" {
+            return Err(Error::Rejected(
+                "offer-backed settlement requires exact offer binding".into(),
+            ));
+        }
+        self.propose_settlement_inner(job, receipt, now)
+    }
+
+    pub fn propose_settlement_for_offer(
+        &mut self,
+        job: &SumJob,
+        offer: &SumOffer,
+        receipt: &SumReceipt,
+        now: u64,
+    ) -> Result<SettlementProposal> {
+        offer.validate(job, now)?;
+        if receipt.offer_id != offer.offer_id
+            || receipt.provider != offer.provider
+            || receipt.price != offer.price
+            || receipt.runtime_digest != offer.runtime_digest
+        {
+            return Err(Error::Rejected(
+                "receipt does not bind the selected offer".into(),
+            ));
+        }
+        self.propose_settlement_inner(job, receipt, now)
+    }
+
+    fn propose_settlement_inner(
+        &mut self,
+        job: &SumJob,
+        receipt: &SumReceipt,
+        now: u64,
+    ) -> Result<SettlementProposal> {
         let receipt_digest = digest(receipt)?;
         if receipt.validate(job, now).is_err()
             || now >= job.deadline
@@ -412,6 +460,7 @@ impl ReceiptVerifier {
         }
         let proposal = SettlementProposal {
             job_digest: job.digest()?,
+            offer_id: receipt.offer_id.clone(),
             receipt_digest,
             provider: receipt.provider.clone(),
             price: receipt.price,

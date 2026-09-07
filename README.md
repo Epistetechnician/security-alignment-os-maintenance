@@ -58,7 +58,7 @@ JavaScript runtime dependencies are installed.
 | `specialist`, `memory` | Immutable specialist identities, consented retrieval, revocation, redacted telemetry, frozen tool manifests, and canonical durable memory/registry snapshots with crash recovery |
 | `routing` | Digest-only caller-selected specialist routing bound to active tenant consent and immutable identity |
 | `integration` | Evidence-bound workflow execution, receipt-gated execution, lifecycle completion/quarantine, observation, rollback, freeze, and kill disposition |
-| `market` | Fixed local sum with job/input commitments, typed offers, result recomputation, binding/timeout/replay checks, and an authorization-required settlement proposal |
+| `market` | Fixed local sum with job/input commitments, typed exact-offer receipts, result recomputation, binding/timeout/replay checks, and an authorization-required settlement proposal |
 | `governance` | Shadow/canary/local-release records with immutable base, phase evidence, lifecycle validation, and canonical persistence/recovery |
 | `faults` | Deterministic replay, stale-clock, stale-policy, malformed-bytes, partial-write, and kill/freeze scenarios |
 

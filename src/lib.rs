@@ -1845,6 +1845,13 @@ mod tests {
         assert!(market::execute_local_with_offer(&job, &tampered, 20).is_err());
         let mut verifier = market::ReceiptVerifier::default();
         assert!(verifier.verify(&job, &receipt, 20).unwrap());
+        assert!(verifier
+            .propose_settlement_for_offer(&job, &offers[0], &receipt, 20)
+            .is_err());
+        let settlement = verifier
+            .propose_settlement_for_offer(&job, selected, &receipt, 20)
+            .unwrap();
+        assert_eq!(settlement.offer_id, selected.offer_id);
 
         let mut expired = offers[0].clone();
         expired.expires_at = 20;

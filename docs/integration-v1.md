@@ -101,12 +101,15 @@ the exact input commitment, output schema, ordinary receipt type, privacy
 requirement, price ceiling, deadline, and immutable program identity. Typed
 `SumOffer` records bind to the exact job digest, fixed runtime and result
 commitment; selection is deterministic by price, provider, and offer ID.
-`SumReceipt` and a separate verifier recompute the result, check
-program/input/time/price/status bindings, reject a repeated receipt digest, and
-permit one typed `SettlementProposal` only after local verification. The
-proposal remains `AuthorizationRequired`; no payment path exists. The
-verifier's verified/reserved sets support canonical caller-owned save/load/
-recovery. No provider, wallet, chain, zero-knowledge, FHE, or MPC workload runs.
+`SumReceipt` carries the selected offer ID and runtime digest. A separate
+verifier recomputes the result, checks program/input/time/price/status bindings,
+rejects a repeated receipt digest, and permits one typed
+`SettlementProposal` only after local verification. Direct local receipts use
+the explicit `local-direct-v1` offer ID; offer-backed settlement requires the
+exact offer ID, provider, price, and runtime digest. The proposal remains
+`AuthorizationRequired`; no payment path exists. The verifier's
+verified/reserved sets support canonical caller-owned save/load/recovery. No
+provider, wallet, chain, zero-knowledge, FHE, or MPC workload runs.
 
 `governance::ReleaseRegistry` preserves an immutable base and rollback target.
 Shadow and canary advances require the candidate's first evidence digest, then a

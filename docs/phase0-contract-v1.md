@@ -73,12 +73,18 @@ rollback, consecutive failures, and failures observed in a sliding window. Its
 Zero is allowed as an explicit immediate-freeze ceiling.
 
 `FailureBudget::tracker()` validates the limits before creating a
-`FailureTracker`. `FailureTracker::record_failure()` increments exactly one
+`FailureTracker`. `FailureTracker::validate()` checks the budget, bounded
+window, and counter consistency. `FailureTracker::record_failure()` increments exactly one
 category, maintains the bounded recent window, and returns
 `BudgetDecision::FreezeRequired` when any inclusive ceiling is reached. A
 subsequent observation after exhaustion returns `BudgetExhausted`.
 `record_success()` resets the consecutive-failure count; it does not erase
 historical category counts or the recent window.
+
+Failure trackers can be saved and loaded as canonical JSON. `recover()`
+promotes a validated temporary snapshot only when the primary is absent;
+malformed primary bytes remain an error. Persistence is caller-owned and does
+not provide an independent monitor or process kill.
 
 These counters are caller-owned local observations. They do not provide a
 distributed failure detector, trusted clock, independent monitor, or automatic

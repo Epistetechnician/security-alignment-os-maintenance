@@ -8,9 +8,12 @@
 //! kernel. Capability sets are a powerset lattice: no capability silently
 //! implies another capability.
 
+use crate::{canonical_bytes, Error as CrateError, Result as CrateResult};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 use std::fmt;
+use std::fs;
+use std::path::Path;
 use thiserror::Error;
 
 pub const STATE_SLICE: &str = "security-alignment-os-foundation-v1";
@@ -322,24 +325,58 @@ pub struct FailureTracker {
 }
 
 impl FailureTracker {
-    pub fn record_failure(&mut self, kind: FailureKind) -> Result<BudgetDecision, ContractError> {
+    pub fn validate(&self) -> Result<(), ContractError> {
         self.budget.validate()?;
+        if self.recent.len() > self.budget.window_size as usize {
+            return Err(ContractError::InvalidBudget(
+                "recent failure window exceeds its budget".into(),
+            ));
+        }
+        let total =
+            u64::from(self.rejections) + u64::from(self.quarantines) + u64::from(self.rollbacks);
+        if u64::from(self.consecutive_failures) > total
+            || (self.recent.is_empty() && self.consecutive_failures > 0)
+        {
+            return Err(ContractError::InvalidBudget(
+                "failure counters are inconsistent".into(),
+            ));
+        }
+        Ok(())
+    }
+
+    pub fn record_failure(&mut self, kind: FailureKind) -> Result<BudgetDecision, ContractError> {
+        self.validate()?;
         if self.is_exhausted() {
             return Err(ContractError::BudgetExhausted);
         }
 
         match kind {
-            FailureKind::Rejection => self.rejections = self.rejections.saturating_add(1),
-            FailureKind::Quarantine => self.quarantines = self.quarantines.saturating_add(1),
-            FailureKind::Rollback => self.rollbacks = self.rollbacks.saturating_add(1),
+            FailureKind::Rejection => {
+                self.rejections = self.rejections.checked_add(1).ok_or_else(|| {
+                    ContractError::InvalidBudget("rejection counter overflow".into())
+                })?
+            }
+            FailureKind::Quarantine => {
+                self.quarantines = self.quarantines.checked_add(1).ok_or_else(|| {
+                    ContractError::InvalidBudget("quarantine counter overflow".into())
+                })?
+            }
+            FailureKind::Rollback => {
+                self.rollbacks = self.rollbacks.checked_add(1).ok_or_else(|| {
+                    ContractError::InvalidBudget("rollback counter overflow".into())
+                })?
+            }
         }
-        self.consecutive_failures = self.consecutive_failures.saturating_add(1);
+        self.consecutive_failures = self.consecutive_failures.checked_add(1).ok_or_else(|| {
+            ContractError::InvalidBudget("consecutive failure counter overflow".into())
+        })?;
         self.recent.push(kind);
         let window = self.budget.window_size as usize;
         if self.recent.len() > window {
             let excess = self.recent.len() - window;
             self.recent.drain(..excess);
         }
+        self.validate()?;
 
         Ok(if self.is_exhausted() {
             BudgetDecision::FreezeRequired
@@ -365,6 +402,42 @@ impl FailureTracker {
 
     fn at_or_over(observed: u32, limit: u32) -> bool {
         observed > 0 && observed >= limit
+    }
+
+    pub fn save(&self, path: &Path) -> CrateResult<()> {
+        self.validate()
+            .map_err(|error| CrateError::Invalid(error.to_string()))?;
+        let temporary = path.with_extension("tmp");
+        fs::write(&temporary, canonical_bytes(self)?)?;
+        fs::rename(temporary, path)?;
+        Ok(())
+    }
+
+    pub fn load(path: &Path) -> CrateResult<Self> {
+        let bytes = fs::read(path)?;
+        let tracker: Self = serde_json::from_slice(&bytes)?;
+        if canonical_bytes(&tracker)? != bytes {
+            return Err(CrateError::Journal(
+                "failure tracker bytes are not canonical JSON".into(),
+            ));
+        }
+        tracker
+            .validate()
+            .map_err(|error| CrateError::Invalid(error.to_string()))?;
+        Ok(tracker)
+    }
+
+    pub fn recover(path: &Path) -> CrateResult<Self> {
+        match Self::load(path) {
+            Ok(tracker) => Ok(tracker),
+            Err(CrateError::Persistence(error)) if error.kind() == std::io::ErrorKind::NotFound => {
+                let temporary = path.with_extension("tmp");
+                let tracker = Self::load(&temporary)?;
+                fs::rename(temporary, path)?;
+                Ok(tracker)
+            }
+            Err(error) => Err(error),
+        }
     }
 }
 
@@ -503,5 +576,50 @@ mod tests {
             tracker.record_failure(FailureKind::Rejection).unwrap(),
             BudgetDecision::FreezeRequired
         );
+    }
+
+    #[test]
+    fn failure_tracker_snapshot_is_canonical_and_recoverable() {
+        let budget = FailureBudget {
+            max_rejections: 3,
+            max_quarantines: 3,
+            max_rollbacks: 3,
+            max_consecutive_failures: 3,
+            max_window_failures: 3,
+            window_size: 4,
+        };
+        let mut tracker = budget.tracker().expect("tracker");
+        tracker
+            .record_failure(FailureKind::Rejection)
+            .expect("record");
+        tracker.validate().expect("validate");
+        let directory = tempfile::tempdir().expect("directory");
+        let path = directory.path().join("failures.json");
+        tracker.save(&path).expect("save");
+        assert_eq!(FailureTracker::load(&path).expect("load"), tracker);
+        let canonical = std::fs::read(&path).expect("canonical");
+        let mut tampered = canonical.clone();
+        let tamper_index = tampered.len() - 2;
+        tampered[tamper_index] = b' ';
+        std::fs::write(&path, tampered).expect("tamper");
+        assert!(FailureTracker::load(&path).is_err());
+        std::fs::write(path.with_extension("tmp"), canonical).expect("temporary");
+        std::fs::remove_file(&path).expect("remove primary");
+        assert_eq!(FailureTracker::recover(&path).expect("recover"), tracker);
+    }
+
+    #[test]
+    fn failure_tracker_rejects_inconsistent_persisted_counters() {
+        let budget = FailureBudget {
+            max_rejections: 3,
+            max_quarantines: 3,
+            max_rollbacks: 3,
+            max_consecutive_failures: 3,
+            max_window_failures: 3,
+            window_size: 4,
+        };
+        let mut tracker = budget.tracker().expect("tracker");
+        tracker.consecutive_failures = 1;
+        assert!(tracker.validate().is_err());
     }
 }

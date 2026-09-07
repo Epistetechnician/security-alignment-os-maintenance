@@ -49,7 +49,7 @@ JavaScript runtime dependencies are installed.
 | `artifacts` | Quarantined artifact manifests with subject/source/provenance digests, retention, review, revocation, and canonical persistence/recovery |
 | `custody` | Owner-declared external custody and bounded retention records with canonical recovery |
 | `claims` | Meet-only claim envelopes and digest-only aggregate release packets |
-| `contract` | Explicit capability lattice, lifecycle transitions, and caller-owned failure budgets |
+| `contract` | Explicit capability lattice, lifecycle transitions, and validated/recoverable caller-owned failure budgets |
 | `property` | Exhaustive local lattice/lifecycle checks and digest-only invariant reports |
 | `receipts` | Ed25519-signed capability receipts with exact decision binding and local replay rejection |
 | `execution_gate` | Typed sandbox/request boundary that validates controls and remains blocked locally |

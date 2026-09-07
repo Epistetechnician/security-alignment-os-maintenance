@@ -43,7 +43,7 @@ closed until those gates are independently satisfied.
 ## Local implementation status after parallel build
 
 The local kernel, canonical journal persistence/recovery, explicit capability
-lattice, failure budgets, versioned schema registry, exhaustive property checks,
+lattice, validated failure-budget persistence/recovery, versioned schema registry, exhaustive property checks,
 signed capability receipts, typed execution gate, artifact-manifest lifecycle,
 custody records, meet-only claim envelopes, evidence
 lifecycle, measurement locks, dictionary rollback, specialist

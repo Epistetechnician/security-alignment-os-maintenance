@@ -62,8 +62,11 @@ transition increments the `Lifecycle::revision`; failed transitions leave the
 state and revision unchanged.
 
 `transition(state, event)` is the pure transition function. `Lifecycle::apply`
-wraps it in a caller-owned state record. Invalid transitions return
-`ContractError::InvalidTransition` and do not mutate the record.
+wraps it in a caller-owned state record and appends each accepted event to its
+history. `Lifecycle::validate` replays the history from `Proposal` and checks
+that it reaches the stored state at the stored revision. Invalid transitions
+return `ContractError::InvalidTransition` and do not mutate the record; forged
+history or state returns `ContractError::InvalidLifecycle`.
 
 ## Failure budget
 

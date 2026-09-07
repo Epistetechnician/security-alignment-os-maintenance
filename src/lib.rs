@@ -477,6 +477,7 @@ impl KernelSnapshot {
                 !valid_digest(candidate_digest)
                     || lifecycle.revision == 0
                     || lifecycle.state == contract::LifecycleState::Proposal
+                    || lifecycle.validate().is_err()
                     || !journal_candidates.contains(candidate_digest.as_str())
             })
         {
@@ -1919,6 +1920,14 @@ mod tests {
         let mut invalid = kernel.snapshot();
         invalid.lifecycles.clear();
         assert!(Kernel::from_snapshot(invalid).is_err());
+
+        let mut forged = kernel.snapshot();
+        forged
+            .lifecycles
+            .get_mut(&candidate_digest)
+            .expect("lifecycle")
+            .state = contract::LifecycleState::Frozen;
+        assert!(Kernel::from_snapshot(forged).is_err());
     }
 
     #[test]

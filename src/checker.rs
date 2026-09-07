@@ -110,6 +110,7 @@ pub fn validate_lifecycles(
             !valid_digest(candidate_digest)
                 || lifecycle.revision == 0
                 || lifecycle.state == LifecycleState::Proposal
+                || lifecycle.validate().is_err()
                 || !journal_candidates.contains(candidate_digest.as_str())
         })
     {

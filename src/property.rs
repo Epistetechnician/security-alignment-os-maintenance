@@ -187,7 +187,11 @@ pub fn check_lifecycle_transitions() -> Result<PropertyOutcome> {
                 mismatches = mismatches.saturating_add(1);
             }
 
-            let mut lifecycle = Lifecycle { state, revision: 7 };
+            let mut lifecycle = Lifecycle {
+                state,
+                revision: 7,
+                events: Vec::new(),
+            };
             let before = lifecycle.clone();
             match expected {
                 Some(next) => {

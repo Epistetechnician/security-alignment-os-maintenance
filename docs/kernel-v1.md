@@ -37,7 +37,9 @@ The replay journal binds a digest of `(agent_id, nonce)` in addition to the
 candidate digest, so a nonce cannot be reused by the same agent under a changed
 candidate.
 
-Every journaled proposal also receives a lifecycle record. Accepted admission
+Every journaled proposal also receives a lifecycle record with an ordered event
+history. `Lifecycle::validate` replays that history from `Proposal` and rejects
+revision, event-order, or current-state mismatches. Accepted admission
 transitions `Proposal -> Admitted`, successful capability consumption requires
 `Admitted` and transitions to `Executing`, and the coordinator must record
 `Complete`, `Rollback`, `Freeze`, or `Kill` through the same kernel state

@@ -189,6 +189,8 @@ pub enum ContractError {
     InvalidBudget(String),
     #[error("failure budget is already exhausted")]
     BudgetExhausted,
+    #[error("lifecycle record is invalid: {0}")]
+    InvalidLifecycle(String),
 }
 
 /// The frozen lifecycle transition table.
@@ -236,6 +238,8 @@ pub fn transition(
 pub struct Lifecycle {
     pub state: LifecycleState,
     pub revision: u64,
+    #[serde(default)]
+    pub events: Vec<LifecycleEvent>,
 }
 
 impl Default for Lifecycle {
@@ -243,6 +247,7 @@ impl Default for Lifecycle {
         Self {
             state: LifecycleState::Proposal,
             revision: 0,
+            events: Vec::new(),
         }
     }
 }
@@ -252,10 +257,34 @@ impl Lifecycle {
         Self::default()
     }
 
+    pub fn validate(&self) -> Result<(), ContractError> {
+        if self.revision != self.events.len() as u64 {
+            return Err(ContractError::InvalidLifecycle(
+                "revision does not match event history length".into(),
+            ));
+        }
+        let mut replayed = LifecycleState::Proposal;
+        for event in &self.events {
+            replayed = transition(replayed, *event)?;
+        }
+        if replayed != self.state {
+            return Err(ContractError::InvalidLifecycle(
+                "event history does not reach current state".into(),
+            ));
+        }
+        Ok(())
+    }
+
     pub fn apply(&mut self, event: LifecycleEvent) -> Result<LifecycleState, ContractError> {
+        if self.revision == u64::MAX {
+            return Err(ContractError::InvalidLifecycle(
+                "revision cannot advance".into(),
+            ));
+        }
         let next = transition(self.state, event)?;
         self.state = next;
-        self.revision = self.revision.saturating_add(1);
+        self.revision += 1;
+        self.events.push(event);
         Ok(next)
     }
 }
@@ -485,6 +514,7 @@ mod tests {
             LifecycleState::Admitted
         );
         assert_eq!(lifecycle.revision, 5);
+        lifecycle.validate().unwrap();
 
         let before = lifecycle.clone();
         assert_eq!(
@@ -495,6 +525,18 @@ mod tests {
             })
         );
         assert_eq!(lifecycle, before);
+    }
+
+    #[test]
+    fn lifecycle_history_rejects_forged_current_state() {
+        let mut lifecycle = Lifecycle::new();
+        lifecycle.apply(LifecycleEvent::Admit).unwrap();
+        lifecycle.apply(LifecycleEvent::BeginExecution).unwrap();
+        lifecycle.state = LifecycleState::Completed;
+        assert!(matches!(
+            lifecycle.validate(),
+            Err(ContractError::InvalidLifecycle(_))
+        ));
     }
 
     #[test]

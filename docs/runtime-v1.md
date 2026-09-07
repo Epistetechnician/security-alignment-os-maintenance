@@ -8,7 +8,8 @@ budget bindings, validates write keys before capability consumption, and then
 commits one reversible dictionary transition. Every successful action records a
 checkpoint. `rollback` restores the latest checkpoint while retaining consumed
 authority. `freeze` stops execution and rollback; `kill` also marks the runtime
-killed. Audit records contain operation metadata and state digests, not values.
+killed. Repeated freeze/kill calls do not append duplicate shutdown events.
+Audit records contain operation metadata and state digests, not values.
 
 `SpecialistRegistry` serves immutable `SpecialistIdentity` records and refuses
 identity drift. Revocation is explicit and permanent for a registered ID.
@@ -32,8 +33,10 @@ such as credentials, tokens, prompts, payloads and content before retention.
 
 `integration::run` composes evidence validation, admission, execution and
 caller-supplied health/telemetry observations. An unhealthy observation rolls
-back and freezes after a successful local transition. The observation is an
-assertion supplied by the caller, not host telemetry.
+back and freezes after a successful local transition. Runtime shutdown events
+are one-way; repeated freeze/kill requests do not create duplicate audit
+mutations. The observation is an assertion supplied by the caller, not host
+telemetry.
 
 These are local Rust controls. They do not establish authenticated identity,
 OS/container isolation, process confinement, network policy, model execution,

@@ -14,7 +14,7 @@ financial, deployment, or scientific gates.
 | 2. Evidence plane | `EvidenceRegistry` plus `artifacts::ArtifactManifest`, `custody::CustodyRegistry`, meet-only `claims::ClaimEnvelope`, aggregate packet records, quarantine/accept/revoke lifecycle, canonical persistence/recovery, and exact subject/provenance binding | Partial; authenticated identities, custody verification/deletion enforcement, and public release publication remain open |
 | 3. Security benchmark | Eight local denial families over fit/tune/assessment labels and digest-only fault outcomes | Fixture only; held-out families and independent runners remain open |
 | 4. Alignment research | Digest-bound, persistable `alignment::PredictionLock` contract only | Design only; no model execution or causal/behavioral evidence |
-| 5. Safe learning | Local shadow/canary metadata in `governance` | Metadata only; no training, evaluator separation enforcement, serving, or canary |
+| 5. Safe learning | Local shadow/canary metadata in `governance`; terminal freeze rejects repeated mutation | Metadata only; no training, evaluator separation enforcement, serving, or canary |
 | 6. Runtime deployment | Typed `adapters::AdapterPlan` boundary that rejects external authorization, immutable specialist identity snapshots, and frozen/revocable tool manifest registry with canonical persistence | Not implemented; no sandbox, egress, secret broker, attestation, or incident drills |
 | 7. Governance | Local release state with immutable-base evidence cardinality checks and canonical persistence, plus digest-chained audit records | Partial; no authenticated release authority, recurring review, or public claim packet |
 

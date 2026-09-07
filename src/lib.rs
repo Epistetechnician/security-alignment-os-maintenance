@@ -703,6 +703,9 @@ impl Runtime {
         Ok(true)
     }
     pub fn freeze(&mut self, reason: &str) {
+        if self.frozen || self.killed {
+            return;
+        }
         self.frozen = true;
         self.audit.push(
             [
@@ -714,6 +717,9 @@ impl Runtime {
         );
     }
     pub fn kill(&mut self, reason: &str) {
+        if self.killed {
+            return;
+        }
         self.killed = true;
         self.frozen = true;
         self.audit.push(
@@ -1200,6 +1206,19 @@ mod tests {
     }
 
     #[test]
+    fn terminal_controls_do_not_append_duplicate_shutdown_events() {
+        let mut runtime = Runtime::default();
+        runtime.freeze("first freeze");
+        let frozen_audit_len = runtime.audit.len();
+        runtime.freeze("second freeze");
+        assert_eq!(runtime.audit.len(), frozen_audit_len);
+        runtime.kill("first kill");
+        let killed_audit_len = runtime.audit.len();
+        runtime.kill("second kill");
+        assert_eq!(runtime.audit.len(), killed_audit_len);
+    }
+
+    #[test]
     fn rust_specialist_and_fixed_market_are_fail_closed() {
         let identity = specialist::SpecialistIdentity {
             specialist_id: "s".into(),
@@ -1299,6 +1318,7 @@ mod tests {
         );
         release.freeze("c").unwrap();
         assert_eq!(release.state("c"), Some(governance::ReleaseState::Frozen));
+        assert!(release.freeze("c").is_err());
     }
 
     #[test]

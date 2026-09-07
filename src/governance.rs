@@ -161,6 +161,9 @@ impl ReleaseRegistry {
             .records
             .get_mut(id)
             .ok_or_else(|| Error::Invalid("unknown candidate".into()))?;
+        if *state == ReleaseState::Frozen {
+            return Err(Error::Rejected("candidate is already frozen".into()));
+        }
         *state = ReleaseState::Frozen;
         self.validate()?;
         Ok(())

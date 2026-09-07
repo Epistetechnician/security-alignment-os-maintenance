@@ -574,6 +574,11 @@ impl Kernel {
         self.lifecycles.clone()
     }
     pub fn configure_failure_budget(&mut self, budget: contract::FailureBudget) -> Result<()> {
+        if self.frozen || self.killed {
+            return Err(Error::Rejected(
+                "cannot configure a frozen or killed kernel".into(),
+            ));
+        }
         let tracker = budget
             .tracker()
             .map_err(|error| Error::Invalid(error.to_string()))?;
@@ -599,8 +604,10 @@ impl Kernel {
         Ok(decision)
     }
     pub fn observe_success(&mut self) {
-        if let Some(tracker) = self.failure_tracker.as_mut() {
-            tracker.record_success();
+        if !self.frozen && !self.killed {
+            if let Some(tracker) = self.failure_tracker.as_mut() {
+                tracker.record_success();
+            }
         }
     }
     pub fn is_frozen(&self) -> bool {

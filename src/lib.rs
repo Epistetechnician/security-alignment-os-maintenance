@@ -1960,6 +1960,22 @@ mod tests {
                 .map(|tracker| tracker.is_exhausted()),
             Some(true)
         );
+        let snapshot = kernel.snapshot();
+        assert!(snapshot.failure_tracker.is_some());
+        assert!(snapshot
+            .failure_tracker
+            .as_ref()
+            .is_some_and(|tracker| tracker.is_exhausted()));
+        assert!(kernel
+            .configure_failure_budget(contract::FailureBudget {
+                max_rejections: 1,
+                max_quarantines: 1,
+                max_rollbacks: 1,
+                max_consecutive_failures: 1,
+                max_window_failures: 1,
+                window_size: 1,
+            })
+            .is_err());
         assert!(kernel.admit(&proposal("after-budget"), 10).is_err());
     }
 

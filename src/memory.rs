@@ -150,11 +150,13 @@ impl PersistentMemory {
             value,
             value_digest: value_digest.clone(),
         };
-        self.records.insert(
+        let mut next_records = self.records.clone();
+        next_records.insert(
             (record.tenant_id.clone(), record.resource_id.clone()),
             record,
         );
-        self.save()?;
+        self.save_records(&next_records)?;
+        self.records = next_records;
         Ok(value_digest)
     }
 
@@ -192,8 +194,10 @@ impl PersistentMemory {
         if record.grant_id != grant.grant_id {
             return Err(Error::Rejected("memory grant binding mismatch".into()));
         }
-        self.records.remove(&key);
-        self.save()?;
+        let mut next_records = self.records.clone();
+        next_records.remove(&key);
+        self.save_records(&next_records)?;
+        self.records = next_records;
         Ok(true)
     }
 
@@ -206,12 +210,16 @@ impl PersistentMemory {
     }
 
     pub fn save(&self) -> Result<()> {
-        for record in self.records.values() {
+        self.save_records(&self.records)
+    }
+
+    fn save_records(&self, records: &BTreeMap<(String, String), MemoryRecord>) -> Result<()> {
+        for record in records.values() {
             validate_record(record)?;
         }
         let document = MemoryDocument {
             version: FORMAT_VERSION,
-            records: self.records.values().cloned().collect(),
+            records: records.values().cloned().collect(),
         };
         let bytes = canonical_bytes(&document)?;
         let temporary = self.path.with_extension("tmp");

@@ -2073,6 +2073,12 @@ mod tests {
             memory.retrieve(&registry, &grant, "note", 1).unwrap(),
             value
         );
+        let bad_path = dir.path().join("missing-parent").join("memory.json");
+        let mut failing = memory::PersistentMemory::open(&bad_path).unwrap();
+        assert!(failing
+            .put(&registry, &grant, "note", value.clone(), 1)
+            .is_err());
+        assert!(failing.is_empty());
         assert!(memory.retrieve(&registry, &grant, "missing", 1).is_err());
         assert!(memory.retrieve(&registry, &grant, "note", 100).is_err());
         let forged = specialist::ConsentGrant {

@@ -38,6 +38,11 @@ claim that those seams are independent production services or independent
 scientific validators. The coordinator gate is the Cargo test, Clippy, format,
 and digest review over the combined local tree.
 
+The first product-wedge routing seam is also local Rust: `routing::RoutingRequest`
+and `routing::RoutingDecision` bind a caller-selected specialist to an active
+tenant consent grant, immutable identity digest, input digest, and expiry. It
+does not classify raw prompts, load a model, or invoke a specialist.
+
 ## Claim ceiling
 
 Passing local checks establish only local Rust contract and caller-owned

@@ -195,6 +195,9 @@ pub fn partial_write(
     let before_state = digest(&runtime.state)?;
     let executed = runtime.execute(kernel, proposal, &decision, now)?;
     let rolled_back = runtime.rollback("fault-injection:partial-write");
+    if rolled_back {
+        kernel.rollback(proposal)?;
+    }
     let after_state = digest(&runtime.state)?;
     let disposition = if executed && rolled_back && before_state == after_state {
         FaultDisposition::RolledBack
@@ -355,9 +358,15 @@ mod tests {
     #[test]
     fn stale_policy_is_quarantined_before_execution() {
         let mut kernel = Kernel::new(Policy::default()).unwrap();
-        let result = stale_policy_digest(&mut kernel, &proposal("policy"), 10).unwrap();
+        let proposal = proposal("policy");
+        let digest = proposal.digest().unwrap();
+        let result = stale_policy_digest(&mut kernel, &proposal, 10).unwrap();
         assert_eq!(result.disposition, FaultDisposition::Quarantined);
         assert_eq!(kernel.policy, Policy::default());
+        assert_eq!(
+            kernel.lifecycle_state(&digest),
+            Some(crate::contract::LifecycleState::Quarantined)
+        );
     }
 
     #[test]
@@ -379,9 +388,17 @@ mod tests {
     fn partial_write_restores_the_latest_checkpoint() {
         let mut kernel = Kernel::new(Policy::default()).unwrap();
         let mut runtime = Runtime::default();
+        runtime
+            .state
+            .insert("sandbox:existing".into(), Value::Number(9.into()));
+        let before = runtime.state.clone();
         let result = partial_write(&mut kernel, &mut runtime, &proposal("partial"), 10).unwrap();
         assert_eq!(result.disposition, FaultDisposition::RolledBack);
-        assert!(runtime.state.is_empty());
+        assert_eq!(runtime.state, before);
+        assert_eq!(
+            kernel.lifecycle_state(&proposal("partial").digest().unwrap()),
+            Some(crate::contract::LifecycleState::RolledBack)
+        );
     }
 
     #[test]
@@ -408,6 +425,10 @@ mod tests {
         assert!(runtime.is_killed());
         assert!(runtime.is_frozen());
         assert!(runtime.state.is_empty());
+        assert_eq!(
+            kernel.lifecycle_state(&proposal.digest().unwrap()),
+            Some(crate::contract::LifecycleState::Killed)
+        );
     }
 
     #[test]

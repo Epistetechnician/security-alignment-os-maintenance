@@ -1536,6 +1536,31 @@ mod tests {
     }
 
     #[test]
+    fn admitted_unsupported_runtime_action_does_not_consume_capability() {
+        let mut policy = Policy::default();
+        policy.allowed_actions.insert(Action::Execute);
+        let mut kernel = Kernel::new(policy).unwrap();
+        let mut candidate = proposal("unsupported-runtime");
+        candidate.action = Action::Execute;
+        let decision = kernel.admit(&candidate, 10).unwrap();
+        assert_eq!(decision.kind, DecisionKind::Accepted);
+        let mut runtime = Runtime::default();
+        assert!(matches!(
+            runtime.execute(&mut kernel, &candidate, &decision, 10),
+            Err(Error::Rejected(message)) if message == "action is not executable by local runtime"
+        ));
+        let mut retry_runtime = Runtime::default();
+        assert!(matches!(
+            retry_runtime.execute(&mut kernel, &candidate, &decision, 10),
+            Err(Error::Rejected(message)) if message == "action is not executable by local runtime"
+        ));
+        assert_eq!(
+            kernel.lifecycle_state(&candidate.digest().unwrap()),
+            Some(contract::LifecycleState::Admitted)
+        );
+    }
+
+    #[test]
     fn malformed_or_mutated_policy_cannot_issue_authority() {
         let malformed = Policy {
             token_ttl: 0,
@@ -1982,6 +2007,9 @@ mod tests {
     fn coordinator_rolls_back_and_freezes_on_unhealthy_observation() {
         let mut kernel = Kernel::new(Policy::default()).unwrap();
         let mut runtime = Runtime::default();
+        runtime
+            .state
+            .insert("sandbox:prior".into(), Value::Number(9.into()));
         let p = proposal("unhealthy");
         let subject = p.digest().unwrap();
         let mut evidence = EvidenceRegistry::default();
@@ -2013,7 +2041,11 @@ mod tests {
         )
         .unwrap();
         assert_eq!(result.disposition, integration::Disposition::RolledBack);
-        assert!(runtime.state.is_empty());
+        assert_eq!(
+            runtime.state.get("sandbox:prior"),
+            Some(&Value::Number(9.into()))
+        );
+        assert!(!runtime.state.contains_key("sandbox:key"));
         assert!(runtime.is_frozen());
         assert_eq!(
             kernel.lifecycle_state(&p.digest().unwrap()),

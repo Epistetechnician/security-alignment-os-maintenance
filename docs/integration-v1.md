@@ -14,7 +14,8 @@ copied. The implementation has no third-party runtime services.
 admission. The kernel records a digest-chained decision and issues a single-use
 capability. `Runtime::execute` validates the full capability and action payload,
 consumes authority immediately before the state commit, records a checkpoint,
-and retains metadata-only audit entries. The kernel lifecycle follows the same
+and retains metadata-only audit entries bound to the candidate, decision, policy,
+and capability-token digests. The kernel lifecycle follows the same
 path: admission records `Admitted`, consumption records `Executing`, healthy
 completion records `Completed`, and unhealthy observations record rollback
 followed by freeze or kill. `integration::run` returns a digest-only

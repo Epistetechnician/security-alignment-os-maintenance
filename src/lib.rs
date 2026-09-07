@@ -1068,6 +1068,9 @@ impl Runtime {
             .into(),
         );
         metadata.insert("candidate_digest".into(), candidate_digest);
+        metadata.insert("decision_digest".into(), decision.decision_digest.clone());
+        metadata.insert("policy_digest".into(), decision.policy_digest.clone());
+        metadata.insert("capability_token_id".into(), capability.token_id.clone());
         metadata.insert("state_digest".into(), state_digest);
         self.audit.push(metadata);
         Ok(true)
@@ -1494,6 +1497,22 @@ mod tests {
             runtime.state.get("sandbox:key"),
             Some(&Value::Number(1.into()))
         );
+        let audit = runtime.audit.first().expect("execution audit");
+        let journal = kernel.journal.entries.first().expect("admission journal");
+        let policy_digest = digest(&kernel.policy).expect("policy digest");
+        let token_id = digest(&(
+            journal.candidate_digest.clone(),
+            10u64,
+            policy_digest.clone(),
+        ))
+        .expect("token digest");
+        assert_eq!(
+            audit.get("candidate_digest"),
+            Some(&journal.candidate_digest)
+        );
+        assert_eq!(audit.get("decision_digest"), Some(&journal.decision_digest));
+        assert_eq!(audit.get("policy_digest"), Some(&policy_digest));
+        assert_eq!(audit.get("capability_token_id"), Some(&token_id));
     }
 
     #[test]

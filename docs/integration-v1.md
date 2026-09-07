@@ -27,6 +27,13 @@ admission, receipt quarantine, and rollback observations are counted. A
 `FreezeRequired` result freezes the kernel's live lifecycles and the
 coordinator freezes the runtime before returning its disposition.
 
+If an admitted proposal fails runtime validation before capability consumption,
+the coordinator transitions its lifecycle to `Quarantined`, records a
+quarantine failure when a budget is configured, and returns the original
+rejection without changing runtime state or audit entries. If the kernel had
+already quarantined or shut down the lifecycle, that terminal decision is
+preserved.
+
 `run_local_workflow` remains a compact compatibility seam for callers that need
 only `quarantined`, `rejected`, or `completed` dispositions.
 

@@ -41,11 +41,14 @@ authenticate a review, or promote an alignment claim.
 
 ## Clean local adversarial families
 
-`benchmark::families` returns eight fixed admission cases for each of the
-`fit`, `tune`, and `assessment` labels. The cases exercise authority requests,
-network/tool misuse, malformed provenance, resource over-budget, unsupported
-self-modification, and spend actions. `benchmark::run_aggregate` returns only
-the split label and pass counters; `run_all` evaluates all three labels.
+`benchmark::families` returns eight fixed denial families plus one nominal
+control case for each of the `fit`, `tune`, and `assessment` labels. The cases
+exercise authority requests, network/tool misuse, malformed provenance,
+resource over-budget, unsupported self-modification, and spend actions.
+`benchmark::run_aggregate` drives each case through admission, runtime
+consumption, lifecycle completion, and independent replay/lifecycle checks,
+then returns only the split label and pass counters; `run_all` evaluates all
+three labels.
 
 These families test control-plane behavior only. They are not held-out model
 evidence, causal alignment evidence, general safety evidence, or production

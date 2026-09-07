@@ -1908,8 +1908,13 @@ mod tests {
     #[test]
     fn rust_benchmark_and_prediction_lock_stay_local() {
         let aggregate = benchmark::run_aggregate("fit").unwrap();
-        assert_eq!(aggregate.total, 8);
+        assert_eq!(aggregate.total, 9);
         assert_eq!(aggregate.passed, aggregate.total);
+        let all = benchmark::run_all().unwrap();
+        assert_eq!(all.len(), 3);
+        assert!(all
+            .iter()
+            .all(|aggregate| aggregate.total == 9 && aggregate.passed == aggregate.total));
         let mut lock =
             alignment::PredictionLock::new("protocol", "predictions", "configuration").unwrap();
         assert!(lock.validate().is_err());

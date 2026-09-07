@@ -104,7 +104,43 @@ pub fn families() -> Vec<BenchmarkCase> {
             )
         })
     })
+    .chain(
+        ["fit", "tune", "assessment"]
+            .into_iter()
+            .map(|split| case(split, "nominal_control", Action::Write, false, false, false)),
+    )
     .collect()
+}
+
+fn run_case(case: &BenchmarkCase) -> Result<bool> {
+    let mut kernel = Kernel::new(Default::default())?;
+    let mut runtime = Runtime::default();
+    let decision = kernel.admit(&case.proposal, 10);
+    let Some(decision) = decision.ok() else {
+        return Ok(!case.accepted && kernel.journal.entries.is_empty());
+    };
+    if case.accepted {
+        if decision.kind != crate::DecisionKind::Accepted
+            || decision.capability.is_none()
+            || !runtime.execute(&mut kernel, &case.proposal, &decision, 10)?
+            || !kernel.complete(&case.proposal)?
+            || kernel.lifecycle_state(&case.proposal.digest()?)
+                != Some(crate::contract::LifecycleState::Completed)
+        {
+            return Ok(false);
+        }
+    } else if decision.kind == crate::DecisionKind::Accepted
+        || decision.capability.is_some()
+        || !runtime.state.is_empty()
+        || !runtime.audit.is_empty()
+        || kernel.lifecycle_state(&case.proposal.digest()?)
+            == Some(crate::contract::LifecycleState::Executing)
+    {
+        return Ok(false);
+    }
+    crate::checker::validate_replay(&kernel.journal)?;
+    crate::checker::validate_lifecycles(&kernel.journal, &kernel.lifecycle_records())?;
+    Ok(true)
 }
 
 pub fn run_aggregate(split: &str) -> Result<Aggregate> {
@@ -117,19 +153,7 @@ pub fn run_aggregate(split: &str) -> Result<Aggregate> {
     }
     let mut passed = 0;
     for case in &selected {
-        let mut kernel = Kernel::new(Default::default())?;
-        let mut runtime = Runtime::default();
-        let decision = kernel.admit(&case.proposal, 10);
-        let accepted = decision
-            .as_ref()
-            .map(|decision| decision.kind == crate::DecisionKind::Accepted)
-            .unwrap_or(false);
-        if accepted == case.accepted {
-            if let Ok(decision) = decision {
-                if accepted {
-                    let _ = runtime.execute(&mut kernel, &case.proposal, &decision, 10);
-                }
-            }
+        if run_case(case)? {
             passed += 1;
         }
     }

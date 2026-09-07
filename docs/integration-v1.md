@@ -59,6 +59,11 @@ digests without raw payloads. Both remain caller-owned local records.
 `checker` independently recomputes replay, audit and fixed-receipt invariants
 for local regression. Its result is not independent acceptance evidence.
 
+`alignment::PredictionLock` binds the protocol, prediction, configuration and
+lock-state digests. Fit completion and independent acceptance remain caller
+assertions; canonical save/load/recovery detects snapshot tampering but does
+not authenticate a reviewer or open assessment effects.
+
 `EvidenceRegistry` snapshots can be saved, loaded, and recovered through a
 canonical temporary-file boundary. Accepted/revoked records are revalidated
 on every load, including subject, role, and lifecycle fields.

@@ -8,6 +8,56 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
 
+const MAX_METADATA_FIELDS: usize = 8;
+
+fn validate_metadata(metadata: &BTreeMap<String, String>) -> Result<()> {
+    if metadata.is_empty() || metadata.len() > MAX_METADATA_FIELDS {
+        return Err(Error::Journal(
+            "audit metadata field count is invalid".into(),
+        ));
+    }
+    for (key, value) in metadata {
+        if key.is_empty()
+            || key.len() > 64
+            || key.chars().any(char::is_control)
+            || value.is_empty()
+            || value.len() > 256
+            || value.chars().any(char::is_control)
+        {
+            return Err(Error::Journal("audit metadata field is malformed".into()));
+        }
+        match key.as_str() {
+            "event" => {
+                if !matches!(
+                    value.as_str(),
+                    "read" | "write" | "freeze" | "kill" | "rollback"
+                ) {
+                    return Err(Error::Journal("audit event is not allowlisted".into()));
+                }
+            }
+            "candidate_digest"
+            | "decision_digest"
+            | "policy_digest"
+            | "capability_token_id"
+            | "state_digest"
+            | "reason_digest" => {
+                if !valid_digest(value) {
+                    return Err(Error::Journal("audit digest field is malformed".into()));
+                }
+            }
+            _ => {
+                return Err(Error::Journal(
+                    "audit metadata key is not allowlisted".into(),
+                ))
+            }
+        }
+    }
+    if !metadata.contains_key("event") {
+        return Err(Error::Journal("audit event field is missing".into()));
+    }
+    Ok(())
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct AuditEntry {
     pub sequence: u64,
@@ -25,6 +75,7 @@ impl AuditJournal {
     pub fn from_records(records: &[BTreeMap<String, String>]) -> Result<Self> {
         let mut journal = Self::default();
         for metadata in records {
+            validate_metadata(metadata)?;
             let sequence = journal.entries.len() as u64;
             let previous_digest = journal
                 .entries
@@ -45,7 +96,8 @@ impl AuditJournal {
     pub fn validate(&self) -> Result<()> {
         let mut previous = "0".repeat(64);
         for (index, entry) in self.entries.iter().enumerate() {
-            if entry.sequence != index as u64
+            if validate_metadata(&entry.metadata).is_err()
+                || entry.sequence != index as u64
                 || entry.previous_digest != previous
                 || !valid_digest(&entry.previous_digest)
                 || !valid_digest(&entry.entry_digest)

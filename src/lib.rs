@@ -1922,6 +1922,21 @@ mod tests {
     }
 
     #[test]
+    fn audit_persistence_rejects_raw_or_unknown_metadata() {
+        let mut runtime = Runtime::default();
+        runtime.audit.push(
+            [
+                ("event".into(), "write".into()),
+                ("prompt".into(), "raw user content".into()),
+            ]
+            .into_iter()
+            .collect(),
+        );
+        assert!(runtime.audit_journal().is_err());
+        assert!(Runtime::from_snapshot(runtime.snapshot()).is_err());
+    }
+
+    #[test]
     fn runtime_snapshot_is_canonical_and_recoverable() {
         let mut runtime = Runtime::default();
         runtime

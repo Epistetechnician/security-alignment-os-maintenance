@@ -21,6 +21,58 @@ use std::collections::{BTreeMap, BTreeSet};
 const RECEIPT_VERSION: u8 = 1;
 const SIGNATURE_LEN: usize = 64;
 
+fn validate_audit_metadata(metadata: &BTreeMap<String, String>) -> Result<()> {
+    if metadata.is_empty() || metadata.len() > 8 {
+        return Err(Error::Journal(
+            "independent audit metadata count invalid".into(),
+        ));
+    }
+    for (key, value) in metadata {
+        if key.is_empty()
+            || key.len() > 64
+            || key.chars().any(char::is_control)
+            || value.is_empty()
+            || value.len() > 256
+            || value.chars().any(char::is_control)
+        {
+            return Err(Error::Journal(
+                "independent audit metadata malformed".into(),
+            ));
+        }
+        match key.as_str() {
+            "event" => {
+                if !matches!(
+                    value.as_str(),
+                    "read" | "write" | "freeze" | "kill" | "rollback"
+                ) {
+                    return Err(Error::Journal("independent audit event invalid".into()));
+                }
+            }
+            "candidate_digest"
+            | "decision_digest"
+            | "policy_digest"
+            | "capability_token_id"
+            | "state_digest"
+            | "reason_digest" => {
+                if !valid_digest(value) {
+                    return Err(Error::Journal("independent audit digest invalid".into()));
+                }
+            }
+            _ => {
+                return Err(Error::Journal(
+                    "independent audit metadata key invalid".into(),
+                ))
+            }
+        }
+    }
+    if !metadata.contains_key("event") {
+        return Err(Error::Journal(
+            "independent audit event field missing".into(),
+        ));
+    }
+    Ok(())
+}
+
 #[derive(Clone, Debug, Serialize)]
 struct ReceiptIdentityPayload<'a> {
     version: u8,
@@ -124,6 +176,7 @@ pub fn validate_lifecycles(
 pub fn validate_audit(journal: &AuditJournal) -> Result<()> {
     let mut previous = "0".repeat(64);
     for (index, entry) in journal.entries.iter().enumerate() {
+        validate_audit_metadata(&entry.metadata)?;
         if entry.sequence != index as u64
             || entry.previous_digest != previous
             || !valid_digest(&entry.previous_digest)

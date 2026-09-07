@@ -14,6 +14,9 @@ Shutdown and rollback reasons are retained only as digests, never as raw text.
 `RuntimeSnapshot` persists state, checkpoints, shutdown flags, and audit records
 as canonical JSON; `recover_snapshot` promotes a validated temporary snapshot
 only when the primary is absent.
+The persisted audit schema allowlists the event field plus candidate, decision,
+policy, capability-token, state, and shutdown-reason digests; unknown fields,
+raw text fields, and malformed digest values fail closed before persistence.
 
 `SpecialistRegistry` serves immutable `SpecialistIdentity` records and refuses
 identity drift. Revocation is explicit and permanent for a registered ID.

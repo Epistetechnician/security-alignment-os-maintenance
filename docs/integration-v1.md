@@ -22,6 +22,11 @@ back and marks the runtime killed.
 `run_local_workflow` remains a compact compatibility seam for callers that need
 only `quarantined`, `rejected`, or `completed` dispositions.
 
+`integration::run_with_receipt` adds a typed `ReceiptBinding` seam. It admits
+the proposal, verifies the signed receipt against the resulting decision and
+current policy, and only then calls the same execution/observation path. A
+receipt failure returns `Quarantined` with no runtime state or audit mutation.
+
 `cargo run --bin local_demo` exercises this path with a fixed local proposal
 and prints only the workflow disposition and digests.
 

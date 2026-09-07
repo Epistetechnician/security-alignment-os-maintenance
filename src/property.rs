@@ -369,17 +369,26 @@ pub fn check_expired_capability_cannot_execute() -> Result<PropertyOutcome> {
     let before_state = digest(&runtime.state)?;
     let before_audit = digest(&runtime.audit)?;
     let attempted = runtime.execute(&mut kernel, &proposal, &decision, 40);
+    let mut retry_runtime = Runtime::default();
+    let retried = retry_runtime.execute(&mut kernel, &proposal, &decision, 20);
     let passed = attempted.is_err()
+        && matches!(&retried, Ok(true))
         && digest(&runtime.state)? == before_state
         && digest(&runtime.audit)? == before_audit;
     PropertyOutcome::new(
         "kernel.expired_capability_cannot_execute",
         passed,
-        &(attempted.is_err(), runtime.state.len(), runtime.audit.len()),
+        &(
+            attempted.is_err(),
+            matches!(&retried, Ok(true)),
+            runtime.state.len(),
+            runtime.audit.len(),
+        ),
     )
 }
 
-/// The kill path must close execution before capability consumption.
+/// The kernel kill path must close execution before capability consumption for
+/// every runtime sharing that kernel.
 pub fn check_kill_closes_execution() -> Result<PropertyOutcome> {
     let proposal = valid_proposal("property-kill");
     let mut kernel = Kernel::new(Policy::default())?;
@@ -387,9 +396,9 @@ pub fn check_kill_closes_execution() -> Result<PropertyOutcome> {
     let decision = kernel.admit(&proposal, 10)?;
     let before_state = digest(&runtime.state)?;
     let before_journal = digest(&kernel.journal)?;
-    runtime.kill("property-kill");
+    kernel.kill_all()?;
     let attempted = runtime.execute(&mut kernel, &proposal, &decision, 10);
-    let passed = runtime.is_killed()
+    let passed = kernel.is_killed()
         && attempted.is_err()
         && digest(&runtime.state)? == before_state
         && digest(&kernel.journal)? == before_journal;
@@ -397,7 +406,7 @@ pub fn check_kill_closes_execution() -> Result<PropertyOutcome> {
         "kernel.kill_closes_execution",
         passed,
         &(
-            runtime.is_killed(),
+            kernel.is_killed(),
             attempted.is_err(),
             runtime.state.len(),
             kernel.journal.entries.len(),

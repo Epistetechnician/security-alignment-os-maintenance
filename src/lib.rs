@@ -1786,6 +1786,16 @@ mod tests {
         tampered_job.input_commitment = "e".repeat(64);
         assert!(tampered_job.validate().is_err());
         assert!(!verifier.verify(&tampered_job, &receipt, 20).unwrap());
+
+        let other_job = market::SumJob::new(
+            "other-offer-job".into(),
+            "requester".into(),
+            vec![4, 5],
+            100,
+            10,
+        )
+        .unwrap();
+        assert!(offers[0].validate(&other_job, 20).is_err());
     }
 
     #[test]

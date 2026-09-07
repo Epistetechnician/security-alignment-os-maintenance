@@ -142,6 +142,7 @@ impl SumReceipt {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct SumOffer {
+    pub job_digest: String,
     pub offer_id: String,
     pub provider: String,
     pub runtime_digest: String,
@@ -164,6 +165,7 @@ impl SumOffer {
         job.validate()?;
         let output = checked_sum(&job.inputs)?;
         let offer = Self {
+            job_digest: job.digest()?,
             offer_id,
             provider,
             runtime_digest: runtime_digest()?,
@@ -180,6 +182,7 @@ impl SumOffer {
     pub fn validate(&self, job: &SumJob, now: u64) -> Result<()> {
         job.validate()?;
         if self.offer_id.is_empty()
+            || self.job_digest != job.digest()?
             || self
                 .offer_id
                 .chars()

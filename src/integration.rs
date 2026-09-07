@@ -100,10 +100,15 @@ fn complete_admitted(
     runtime.execute(kernel, proposal, &decision, observation.at)?;
     if observation.kill_requested || !observation.healthy || !observation.telemetry_present {
         let rolled_back = runtime.rollback("unhealthy observation");
+        if rolled_back {
+            kernel.rollback(proposal)?;
+        }
         if observation.kill_requested {
             runtime.kill("kill observation");
+            kernel.kill(proposal)?;
         } else {
             runtime.freeze("unhealthy observation");
+            kernel.freeze(proposal)?;
         }
         return Ok(WorkflowResult {
             disposition: if rolled_back {
@@ -116,6 +121,7 @@ fn complete_admitted(
             observation_digest,
         });
     }
+    kernel.complete(proposal)?;
     Ok(WorkflowResult {
         disposition: Disposition::Completed,
         subject_digest,
@@ -167,6 +173,7 @@ pub fn run_with_receipt(
         )
         .is_err()
     {
+        kernel.quarantine(proposal)?;
         return Ok(WorkflowResult {
             disposition: Disposition::Quarantined,
             subject_digest,
@@ -314,6 +321,10 @@ mod tests {
             runtime.state.get("public:receipt"),
             Some(&Value::String("verified".into()))
         );
+        assert_eq!(
+            kernel.lifecycle_state(&proposal.digest().expect("subject")),
+            Some(crate::contract::LifecycleState::Completed)
+        );
     }
 
     #[test]
@@ -354,5 +365,9 @@ mod tests {
         assert_eq!(result.disposition, Disposition::Quarantined);
         assert!(runtime.state.is_empty());
         assert!(runtime.audit.is_empty());
+        assert_eq!(
+            kernel.lifecycle_state(&proposal.digest().expect("subject")),
+            Some(crate::contract::LifecycleState::Quarantined)
+        );
     }
 }

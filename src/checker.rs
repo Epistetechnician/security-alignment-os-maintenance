@@ -7,6 +7,7 @@
 //! not authenticated independent acceptance or proof of an external executor.
 
 use crate::audit::AuditJournal;
+use crate::contract::{Lifecycle, LifecycleState};
 use crate::market::{SumJob, SumReceipt};
 use crate::receipts::CapabilityReceipt;
 use crate::{
@@ -15,7 +16,7 @@ use crate::{
 };
 use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 use serde::Serialize;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 const RECEIPT_VERSION: u8 = 1;
 const SIGNATURE_LEN: usize = 64;
@@ -82,6 +83,35 @@ pub fn validate_replay(journal: &ReplayJournal) -> Result<()> {
             return Err(Error::Journal("independent replay digest mismatch".into()));
         }
         previous = entry.entry_digest.clone();
+    }
+    Ok(())
+}
+
+/// Independently checks that every journaled proposal has exactly one
+/// non-proposal lifecycle record and that no lifecycle record exists outside
+/// the journal. This is a persistence consistency check, not an authenticated
+/// review of the transition history.
+pub fn validate_lifecycles(
+    journal: &ReplayJournal,
+    lifecycles: &BTreeMap<String, Lifecycle>,
+) -> Result<()> {
+    validate_replay(journal)?;
+    let journal_candidates = journal
+        .entries
+        .iter()
+        .map(|entry| entry.candidate_digest.as_str())
+        .collect::<BTreeSet<_>>();
+    if journal_candidates.len() != lifecycles.len()
+        || lifecycles.iter().any(|(candidate_digest, lifecycle)| {
+            !valid_digest(candidate_digest)
+                || lifecycle.revision == 0
+                || lifecycle.state == LifecycleState::Proposal
+                || !journal_candidates.contains(candidate_digest.as_str())
+        })
+    {
+        return Err(Error::Journal(
+            "independent lifecycle consistency check failed".into(),
+        ));
     }
     Ok(())
 }

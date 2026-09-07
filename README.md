@@ -43,8 +43,8 @@ JavaScript runtime dependencies are installed.
 
 | Module | Implemented behavior |
 | --- | --- |
-| `Kernel`, `ReplayJournal` | Validated policy, exact issuer/candidate/policy binding, claim expiry, budgets, single-use execution, and atomic journal persistence |
-| `checker` | Independent local recomputation of replay, audit, fixed-job, and signed-capability receipt invariants |
+| `Kernel`, `ReplayJournal` | Validated policy, exact issuer/candidate/policy binding, claim expiry, budgets, single-use execution, lifecycle enforcement, kernel snapshots, and atomic journal persistence |
+| `checker` | Independent local recomputation of replay, lifecycle, audit, fixed-job, and signed-capability receipt invariants |
 | `EvidenceRegistry` | Subject-bound evidence, distinct local review roles, freshness, revocation, and canonical persistence/recovery |
 | `artifacts` | Quarantined artifact manifests with subject/source/provenance digests, retention, review, revocation, and canonical persistence/recovery |
 | `custody` | Owner-declared external custody and bounded retention records with canonical recovery |
@@ -56,7 +56,7 @@ JavaScript runtime dependencies are installed.
 | `schema` | Versioned schema identities with exact digest-bound lookup and canonical recovery |
 | `Runtime`, `AuditJournal` | Reversible dictionary actions, terminal freeze/kill, and digest-chained audit persistence |
 | `specialist`, `memory` | Immutable specialist identities, consented retrieval, revocation, redacted telemetry, frozen tool manifests, and canonical durable memory/registry snapshots with crash recovery |
-| `integration` | Evidence-bound workflow execution, receipt-gated execution, observation, rollback, and freeze disposition |
+| `integration` | Evidence-bound workflow execution, receipt-gated execution, lifecycle completion/quarantine, observation, rollback, freeze, and kill disposition |
 | `market` | Fixed local sum with immutable program validation, result recomputation, binding/timeout/replay checks, and unexecuted settlement proposal |
 | `governance` | Shadow/canary/local-release records with immutable base, phase evidence, lifecycle validation, and canonical persistence/recovery |
 | `faults` | Deterministic replay, stale-clock, stale-policy, malformed-bytes, partial-write, and kill/freeze scenarios |

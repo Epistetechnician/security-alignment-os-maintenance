@@ -413,10 +413,44 @@ struct Issuance {
     consumed: bool,
 }
 
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct KernelSnapshot {
+    pub policy: Policy,
+    pub journal: ReplayJournal,
+    pub lifecycles: BTreeMap<String, contract::Lifecycle>,
+}
+
+impl KernelSnapshot {
+    pub fn validate(&self) -> Result<()> {
+        self.policy.validate()?;
+        self.journal.validate()?;
+        let journal_candidates = self
+            .journal
+            .entries
+            .iter()
+            .map(|entry| entry.candidate_digest.as_str())
+            .collect::<BTreeSet<_>>();
+        if journal_candidates.len() != self.lifecycles.len()
+            || self.lifecycles.iter().any(|(candidate_digest, lifecycle)| {
+                !valid_digest(candidate_digest)
+                    || lifecycle.revision == 0
+                    || lifecycle.state == contract::LifecycleState::Proposal
+                    || !journal_candidates.contains(candidate_digest.as_str())
+            })
+        {
+            return Err(Error::Journal(
+                "kernel lifecycle snapshot is inconsistent".into(),
+            ));
+        }
+        Ok(())
+    }
+}
+
 pub struct Kernel {
     pub policy: Policy,
     pub journal: ReplayJournal,
     issuances: BTreeMap<String, Issuance>,
+    lifecycles: BTreeMap<String, contract::Lifecycle>,
     lock: Mutex<()>,
 }
 
@@ -427,8 +461,64 @@ impl Kernel {
             policy,
             journal: ReplayJournal::default(),
             issuances: BTreeMap::new(),
+            lifecycles: BTreeMap::new(),
             lock: Mutex::new(()),
         })
+    }
+    pub fn snapshot(&self) -> KernelSnapshot {
+        KernelSnapshot {
+            policy: self.policy.clone(),
+            journal: self.journal.clone(),
+            lifecycles: self.lifecycles.clone(),
+        }
+    }
+    pub fn from_snapshot(snapshot: KernelSnapshot) -> Result<Self> {
+        snapshot.validate()?;
+        Ok(Self {
+            policy: snapshot.policy,
+            journal: snapshot.journal,
+            issuances: BTreeMap::new(),
+            lifecycles: snapshot.lifecycles,
+            lock: Mutex::new(()),
+        })
+    }
+    pub fn save_snapshot(&self, path: &Path) -> Result<()> {
+        let snapshot = self.snapshot();
+        snapshot.validate()?;
+        let temporary = path.with_extension("tmp");
+        fs::write(&temporary, canonical_bytes(&snapshot)?)?;
+        fs::rename(temporary, path)?;
+        Ok(())
+    }
+    pub fn load_snapshot(path: &Path) -> Result<Self> {
+        let bytes = fs::read(path)?;
+        let snapshot: KernelSnapshot = serde_json::from_slice(&bytes)?;
+        if canonical_bytes(&snapshot)? != bytes {
+            return Err(Error::Journal(
+                "kernel snapshot bytes are not canonical JSON".into(),
+            ));
+        }
+        Self::from_snapshot(snapshot)
+    }
+    pub fn recover_snapshot(path: &Path) -> Result<Self> {
+        match Self::load_snapshot(path) {
+            Ok(kernel) => Ok(kernel),
+            Err(Error::Persistence(error)) if error.kind() == std::io::ErrorKind::NotFound => {
+                let temporary = path.with_extension("tmp");
+                let kernel = Self::load_snapshot(&temporary)?;
+                fs::rename(temporary, path)?;
+                Ok(kernel)
+            }
+            Err(error) => Err(error),
+        }
+    }
+    pub fn lifecycle_state(&self, candidate_digest: &str) -> Option<contract::LifecycleState> {
+        self.lifecycles
+            .get(candidate_digest)
+            .map(|lifecycle| lifecycle.state)
+    }
+    pub fn lifecycle_records(&self) -> BTreeMap<String, contract::Lifecycle> {
+        self.lifecycles.clone()
     }
     fn policy_digest(&self) -> Result<String> {
         digest(&self.policy)
@@ -528,6 +618,15 @@ impl Kernel {
         capability: Option<Capability>,
     ) -> Result<Decision> {
         let candidate_digest = proposal.digest()?;
+        let lifecycle_event = match kind {
+            DecisionKind::Accepted => contract::LifecycleEvent::Admit,
+            DecisionKind::Rejected => contract::LifecycleEvent::Reject,
+            DecisionKind::Quarantined => contract::LifecycleEvent::Quarantine,
+        };
+        let mut lifecycle = contract::Lifecycle::new();
+        lifecycle
+            .apply(lifecycle_event)
+            .map_err(|error| Error::Rejected(error.to_string()))?;
         let policy_digest = self.policy_digest()?;
         let decision_digest = digest(&(
             proposal.candidate_id.clone(),
@@ -538,6 +637,7 @@ impl Kernel {
             capability.clone(),
         ))?;
         self.journal.append(&candidate_digest, &decision_digest)?;
+        self.lifecycles.insert(candidate_digest.clone(), lifecycle);
         let decision = Decision {
             candidate_id: proposal.candidate_id.clone(),
             kind,
@@ -569,6 +669,17 @@ impl Kernel {
         let key = proposal.digest()?;
         self.policy.validate()?;
         let current_policy_digest = self.policy_digest()?;
+        let mut next_lifecycle = self
+            .lifecycles
+            .get(&key)
+            .cloned()
+            .ok_or_else(|| Error::Rejected("unknown lifecycle record".into()))?;
+        if next_lifecycle.state != contract::LifecycleState::Admitted {
+            return Ok(false);
+        }
+        next_lifecycle
+            .apply(contract::LifecycleEvent::BeginExecution)
+            .map_err(|error| Error::Rejected(error.to_string()))?;
         let issuance = self
             .issuances
             .get_mut(&key)
@@ -586,7 +697,44 @@ impl Kernel {
             return Ok(false);
         }
         issuance.consumed = true;
+        self.lifecycles.insert(key, next_lifecycle);
         Ok(true)
+    }
+
+    fn apply_lifecycle_event(
+        &mut self,
+        proposal: &Proposal,
+        event: contract::LifecycleEvent,
+    ) -> Result<bool> {
+        let key = proposal.digest()?;
+        let lifecycle = self
+            .lifecycles
+            .get_mut(&key)
+            .ok_or_else(|| Error::Rejected("unknown lifecycle record".into()))?;
+        lifecycle
+            .apply(event)
+            .map_err(|error| Error::Rejected(error.to_string()))?;
+        Ok(true)
+    }
+
+    pub fn complete(&mut self, proposal: &Proposal) -> Result<bool> {
+        self.apply_lifecycle_event(proposal, contract::LifecycleEvent::Complete)
+    }
+
+    pub fn rollback(&mut self, proposal: &Proposal) -> Result<bool> {
+        self.apply_lifecycle_event(proposal, contract::LifecycleEvent::Rollback)
+    }
+
+    pub fn quarantine(&mut self, proposal: &Proposal) -> Result<bool> {
+        self.apply_lifecycle_event(proposal, contract::LifecycleEvent::Quarantine)
+    }
+
+    pub fn freeze(&mut self, proposal: &Proposal) -> Result<bool> {
+        self.apply_lifecycle_event(proposal, contract::LifecycleEvent::Freeze)
+    }
+
+    pub fn kill(&mut self, proposal: &Proposal) -> Result<bool> {
+        self.apply_lifecycle_event(proposal, contract::LifecycleEvent::Kill)
     }
 }
 
@@ -1259,8 +1407,15 @@ mod tests {
         let mut p = proposal("authority");
         p.requests_direct_authority = true;
         let evidence = EvidenceRegistry::default();
+        let rejected = kernel.admit(&p, 10).unwrap();
+        assert_eq!(rejected.kind, DecisionKind::Rejected);
         assert_eq!(
-            run_local_workflow(&mut kernel, &mut runtime, &evidence, "missing", &p, 10).unwrap(),
+            kernel.lifecycle_state(&p.digest().unwrap()),
+            Some(contract::LifecycleState::Rejected)
+        );
+        let p2 = proposal("evidence-gated");
+        assert_eq!(
+            run_local_workflow(&mut kernel, &mut runtime, &evidence, "missing", &p2, 10).unwrap(),
             "quarantined"
         );
         assert!(runtime.state.is_empty());
@@ -1460,6 +1615,59 @@ mod tests {
     }
 
     #[test]
+    fn kernel_lifecycle_is_enforced_and_snapshot_is_recoverable() {
+        let mut kernel = Kernel::new(Policy::default()).unwrap();
+        let mut runtime = Runtime::default();
+        let p = proposal("kernel-lifecycle");
+        let candidate_digest = p.digest().unwrap();
+        let decision = kernel.admit(&p, 10).unwrap();
+        assert_eq!(
+            kernel.lifecycle_state(&candidate_digest),
+            Some(contract::LifecycleState::Admitted)
+        );
+        assert!(kernel.complete(&p).is_err());
+        assert!(runtime.execute(&mut kernel, &p, &decision, 10).unwrap());
+        assert_eq!(
+            kernel.lifecycle_state(&candidate_digest),
+            Some(contract::LifecycleState::Executing)
+        );
+        kernel.complete(&p).unwrap();
+        assert_eq!(
+            kernel.lifecycle_state(&candidate_digest),
+            Some(contract::LifecycleState::Completed)
+        );
+        checker::validate_lifecycles(&kernel.journal, &kernel.lifecycle_records()).unwrap();
+
+        let directory = tempdir().unwrap();
+        let path = directory.path().join("kernel.json");
+        kernel.save_snapshot(&path).unwrap();
+        let mut loaded = Kernel::load_snapshot(&path).unwrap();
+        assert_eq!(loaded.snapshot(), kernel.snapshot());
+        assert!(loaded.lifecycle_state(&candidate_digest).is_some());
+        assert!(
+            !loaded.consume(&p, &decision, 10).unwrap(),
+            "restart must not recreate private capability issuance"
+        );
+
+        let canonical = fs::read(&path).unwrap();
+        let mut tampered = canonical.clone();
+        let tamper_index = tampered.len() - 2;
+        tampered[tamper_index] = b' ';
+        fs::write(&path, tampered).unwrap();
+        assert!(Kernel::load_snapshot(&path).is_err());
+        fs::write(path.with_extension("tmp"), canonical).unwrap();
+        fs::remove_file(&path).unwrap();
+        assert_eq!(
+            Kernel::recover_snapshot(&path).unwrap().snapshot(),
+            kernel.snapshot()
+        );
+
+        let mut invalid = kernel.snapshot();
+        invalid.lifecycles.clear();
+        assert!(Kernel::from_snapshot(invalid).is_err());
+    }
+
+    #[test]
     fn rust_benchmark_and_prediction_lock_stay_local() {
         let aggregate = benchmark::run_aggregate("fit").unwrap();
         assert_eq!(aggregate.total, 8);
@@ -1594,6 +1802,10 @@ mod tests {
         assert_eq!(result.disposition, integration::Disposition::RolledBack);
         assert!(runtime.state.is_empty());
         assert!(runtime.is_frozen());
+        assert_eq!(
+            kernel.lifecycle_state(&p.digest().unwrap()),
+            Some(contract::LifecycleState::Frozen)
+        );
         assert!(!runtime.rollback("frozen"));
     }
 

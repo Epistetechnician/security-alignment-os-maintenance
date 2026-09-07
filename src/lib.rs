@@ -32,6 +32,7 @@ pub mod market;
 pub mod memory;
 pub mod property;
 pub mod receipts;
+pub mod routing;
 pub mod schema;
 pub mod specialist;
 

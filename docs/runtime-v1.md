@@ -25,6 +25,13 @@ persistence with the same checks and a digest for each value. `open` and
 `recover` validate a primary snapshot or promote a validated temporary
 snapshot after a crash; malformed primary bytes are never silently replaced.
 
+`routing::RoutingRequest` and `RoutingDecision` provide a digest-only routing
+seam for the first product wedge. A caller selects a registered specialist;
+the route is accepted only while the tenant consent grant and specialist
+identity are active, and the decision binds the exact input digest, grant,
+tenant, specialist identity digest, and expiry window. The seam does not
+classify raw prompts or invoke a model.
+
 `ToolRegistry` binds tool ID/version, implementation digest and a canonical
 sorted manifest-list digest. `freeze` captures the list digest and
 `check_drift` detects later mismatch. `require_invocable` requires an exact

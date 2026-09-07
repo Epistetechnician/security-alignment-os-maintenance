@@ -14,7 +14,9 @@ serializes the private key. `issue` uses the capability's existing validity
 window. `issue_at` can shorten that window but cannot extend it. Only accepted
 decisions whose proposal, policy, agent, action, and scope bindings recompute
 exactly can be signed. The signer, verifier, and independent checker also
-require the transport decision candidate identity to match the proposal.
+require the transport decision candidate identity to match the proposal, and
+recompute the capability intent digest, token digest, and resource budget
+binding before accepting a receipt.
 
 `ReceiptVerifier` requires an explicit local key registry. Verification checks
 canonical shape, receipt identity, subject equality, signature, freshness,

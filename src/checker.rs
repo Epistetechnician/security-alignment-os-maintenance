@@ -214,6 +214,18 @@ pub fn validate_capability_receipt(
     let proposal_digest = proposal.digest()?;
     let policy_digest = digest(policy)?;
     let capability_digest = digest(capability)?;
+    let expected_intent_digest = digest(&(
+        &proposal.agent_id,
+        &proposal.intent,
+        &proposal.action,
+        &proposal.scope,
+        &proposal.nonce,
+    ))?;
+    let expected_token_id = digest(&(
+        proposal_digest.clone(),
+        capability.issued_at,
+        policy_digest.clone(),
+    ))?;
     let expected_decision_digest = digest(&(
         proposal.candidate_id.clone(),
         decision.kind,
@@ -241,9 +253,12 @@ pub fn validate_capability_receipt(
         || now >= receipt.expires_at
         || !valid_digest(&capability.token_id)
         || !valid_digest(&capability.intent_digest)
+        || capability.token_id != expected_token_id
+        || capability.intent_digest != expected_intent_digest
         || !valid_text(&capability.agent_id)
         || !valid_text(&capability.scope)
         || capability.issued_at >= capability.expires_at
+        || capability.budget != proposal.resource_cost
         || decision.candidate_id != proposal.candidate_id
         || decision.candidate_digest != proposal_digest
         || decision.policy_digest != policy_digest

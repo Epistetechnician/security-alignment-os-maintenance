@@ -308,6 +308,18 @@ impl ReceiptSigner {
         let proposal_digest = proposal.digest()?;
         let policy_digest = digest(policy)?;
         let capability_digest = digest(capability)?;
+        let expected_intent_digest = digest(&(
+            &proposal.agent_id,
+            &proposal.intent,
+            &proposal.action,
+            &proposal.scope,
+            &proposal.nonce,
+        ))?;
+        let expected_token_id = digest(&(
+            proposal_digest.clone(),
+            capability.issued_at,
+            policy_digest.clone(),
+        ))?;
         if decision.candidate_digest != proposal_digest
             || decision.candidate_id != proposal.candidate_id
             || decision.policy_digest != policy_digest
@@ -316,6 +328,9 @@ impl ReceiptSigner {
             || capability.agent_id != proposal.agent_id
             || capability.action != proposal.action
             || capability.scope != proposal.scope
+            || capability.intent_digest != expected_intent_digest
+            || capability.token_id != expected_token_id
+            || capability.budget != proposal.resource_cost
         {
             return Err(Error::Rejected(
                 "decision, proposal, policy, or capability binding failed".into(),
@@ -537,6 +552,18 @@ impl ReceiptVerifier {
         let proposal_digest = proposal.digest()?;
         let policy_digest = digest(policy)?;
         let capability_digest = digest(capability)?;
+        let expected_intent_digest = digest(&(
+            &proposal.agent_id,
+            &proposal.intent,
+            &proposal.action,
+            &proposal.scope,
+            &proposal.nonce,
+        ))?;
+        let expected_token_id = digest(&(
+            proposal_digest.clone(),
+            capability.issued_at,
+            policy_digest.clone(),
+        ))?;
         if decision.kind != DecisionKind::Accepted
             || decision.decision_digest
                 != expected_decision_digest(proposal, decision, &policy_digest, capability)?
@@ -553,6 +580,9 @@ impl ReceiptVerifier {
             || receipt.action != capability.action
             || receipt.scope != proposal.scope
             || receipt.scope != capability.scope
+            || capability.intent_digest != expected_intent_digest
+            || capability.token_id != expected_token_id
+            || capability.budget != proposal.resource_cost
             || receipt.issued_at < capability.issued_at
             || receipt.expires_at > capability.expires_at
         {

@@ -19,10 +19,12 @@ persistence with the same checks and a digest for each value.
 
 `ToolRegistry` binds tool ID/version, implementation digest and a canonical
 sorted manifest-list digest. `freeze` captures the list digest and
-`check_drift` detects later mismatch. Tool manifests are contracts only; this
-lane never invokes tools. `RedactedTelemetry` recursively removes sensitive
-fields such as credentials, tokens, prompts, payloads and content before
-retention.
+`check_drift` detects later mismatch. `require_invocable` requires an exact
+manifest digest, while terminal `revoke` blocks future lookup and marks a
+frozen list as drifted. Registry snapshots validate lifecycle data and use
+canonical save/load/recovery. Tool manifests are contracts only; this lane
+never invokes tools. `RedactedTelemetry` recursively removes sensitive fields
+such as credentials, tokens, prompts, payloads and content before retention.
 
 `integration::run` composes evidence validation, admission, execution and
 caller-supplied health/telemetry observations. An unhealthy observation rolls

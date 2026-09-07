@@ -82,8 +82,9 @@ snapshots validate candidate identity, phase evidence cardinality, and
 canonical bytes before save/load/recovery.
 
 `specialist::ToolRegistry` binds tool ID/version, implementation digest and a
-canonical manifest-list digest. `adapters::AdapterPlan` validates the shape of
-an external sandbox/invocation request but rejects external execution
+canonical manifest-list digest, supports exact invocable lookup, terminal
+revocation, and canonical persistence. `adapters::AdapterPlan` validates the
+shape of an external sandbox/invocation request but rejects external execution
 authorization in this foundation slice. `execution_gate::ExecutionGate`
 validates a typed sandbox attestation and external job request, then returns a
 blocked disposition for every valid request.

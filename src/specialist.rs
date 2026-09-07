@@ -2,10 +2,12 @@
 //!
 //! State slice: `security-alignment-os-foundation-v1`.
 
-use crate::{digest, valid_digest, Error, Result};
+use crate::{canonical_bytes, digest, valid_digest, Error, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
+use std::fs;
+use std::path::Path;
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct SpecialistIdentity {
@@ -217,10 +219,11 @@ impl ToolManifest {
     }
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 pub struct ToolRegistry {
     manifests: BTreeMap<String, ToolManifest>,
     frozen_digest: Option<String>,
+    revoked: BTreeSet<String>,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -309,6 +312,9 @@ impl ToolRegistry {
         if self.frozen_digest.is_some() {
             return Err(Error::Rejected("tool list is frozen".into()));
         }
+        if self.revoked.contains(&manifest.tool_id) {
+            return Err(Error::Rejected("tool is revoked".into()));
+        }
         if self
             .manifests
             .get(&manifest.tool_id)
@@ -319,25 +325,168 @@ impl ToolRegistry {
         self.manifests.insert(manifest.tool_id.clone(), manifest);
         Ok(())
     }
-    pub fn freeze(&mut self) -> Result<String> {
+
+    fn manifest_list_digest(&self) -> Result<String> {
         let ids: Vec<String> = self
             .manifests
             .values()
             .map(ToolManifest::identity_digest)
             .collect::<Result<_>>()?;
-        let list = digest(&ids)?;
+        digest(&(ids, &self.revoked))
+    }
+
+    pub fn freeze(&mut self) -> Result<String> {
+        if self.frozen_digest.is_some() {
+            return Err(Error::Rejected("tool list is already frozen".into()));
+        }
+        let list = self.manifest_list_digest()?;
         self.frozen_digest = Some(list.clone());
         Ok(list)
     }
+
+    pub fn revoke(&mut self, tool_id: &str) -> Result<()> {
+        if !self.manifests.contains_key(tool_id) {
+            return Err(Error::Invalid("unknown tool".into()));
+        }
+        if !self.revoked.insert(tool_id.into()) {
+            return Err(Error::Rejected("tool is already revoked".into()));
+        }
+        Ok(())
+    }
+
+    pub fn require_invocable(&self, tool_id: &str, manifest_digest: &str) -> Result<&ToolManifest> {
+        if !valid_digest(manifest_digest) {
+            return Err(Error::Invalid("tool manifest digest is malformed".into()));
+        }
+        if self.revoked.contains(tool_id) {
+            return Err(Error::Rejected("tool is revoked".into()));
+        }
+        let manifest = self
+            .manifests
+            .get(tool_id)
+            .ok_or_else(|| Error::Quarantined("tool is unavailable".into()))?;
+        if manifest.identity_digest()? != manifest_digest {
+            return Err(Error::Rejected("tool manifest digest mismatch".into()));
+        }
+        Ok(manifest)
+    }
+
+    pub fn validate(&self) -> Result<()> {
+        if self
+            .revoked
+            .iter()
+            .any(|tool_id| !self.manifests.contains_key(tool_id))
+        {
+            return Err(Error::Invalid("revoked tool is not registered".into()));
+        }
+        for (tool_id, manifest) in &self.manifests {
+            if tool_id != &manifest.tool_id {
+                return Err(Error::Invalid("tool registry key mismatch".into()));
+            }
+            manifest.validate()?;
+        }
+        if let Some(frozen_digest) = &self.frozen_digest {
+            if !valid_digest(frozen_digest) {
+                return Err(Error::Invalid("frozen tool digest is malformed".into()));
+            }
+        }
+        Ok(())
+    }
+
     pub fn check_drift(&self) -> bool {
-        self.frozen_digest.as_ref().is_some_and(|expected| {
-            let ids: Vec<String> = self
-                .manifests
-                .values()
-                .map(ToolManifest::identity_digest)
-                .collect::<Result<_>>()
-                .unwrap_or_default();
-            digest(&ids).ok().as_ref() == Some(expected)
-        })
+        self.frozen_digest
+            .as_ref()
+            .is_some_and(|expected| self.manifest_list_digest().ok().as_ref() == Some(expected))
+    }
+
+    pub fn save(&self, path: &Path) -> Result<()> {
+        self.validate()?;
+        let temporary = path.with_extension("tmp");
+        fs::write(&temporary, canonical_bytes(self)?)?;
+        fs::rename(temporary, path)?;
+        Ok(())
+    }
+
+    pub fn load(path: &Path) -> Result<Self> {
+        let bytes = fs::read(path)?;
+        let registry: Self = serde_json::from_slice(&bytes)?;
+        if canonical_bytes(&registry)? != bytes {
+            return Err(Error::Journal(
+                "tool registry bytes are not canonical JSON".into(),
+            ));
+        }
+        registry.validate()?;
+        Ok(registry)
+    }
+
+    pub fn recover(path: &Path) -> Result<Self> {
+        match Self::load(path) {
+            Ok(registry) => Ok(registry),
+            Err(Error::Persistence(error)) if error.kind() == std::io::ErrorKind::NotFound => {
+                let temporary = path.with_extension("tmp");
+                let registry = Self::load(&temporary)?;
+                fs::rename(temporary, path)?;
+                Ok(registry)
+            }
+            Err(error) => Err(error),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tool_registry_tests {
+    use super::*;
+
+    fn manifest() -> ToolManifest {
+        ToolManifest {
+            tool_id: "local-tool".into(),
+            version: "1.0.0".into(),
+            schema: serde_json::json!({"type": "object"}),
+            implementation_digest: "a".repeat(64),
+        }
+    }
+
+    #[test]
+    fn frozen_tool_identity_supports_terminal_revocation() {
+        let item = manifest();
+        let item_digest = item.identity_digest().expect("manifest digest");
+        let mut registry = ToolRegistry::default();
+        registry.register(item.clone()).expect("register");
+        assert!(registry
+            .require_invocable("local-tool", &item_digest)
+            .is_ok());
+        registry.freeze().expect("freeze");
+        assert!(registry.check_drift());
+        assert!(registry.freeze().is_err());
+        registry.revoke("local-tool").expect("revoke");
+        assert!(!registry.check_drift());
+        assert!(registry
+            .require_invocable("local-tool", &item_digest)
+            .is_err());
+        assert!(registry.register(item).is_err());
+        assert!(registry.revoke("local-tool").is_err());
+    }
+
+    #[test]
+    fn tool_registry_snapshot_is_canonical_and_rejects_drifted_bytes() {
+        let mut registry = ToolRegistry::default();
+        registry.register(manifest()).expect("register");
+        registry.freeze().expect("freeze");
+        let directory = tempfile::tempdir().expect("directory");
+        let path = directory.path().join("tools.json");
+        registry.save(&path).expect("save");
+        assert_eq!(ToolRegistry::load(&path).expect("load"), registry);
+        let mut bytes = std::fs::read(&path).expect("read");
+        let tamper_index = bytes.len() - 2;
+        bytes[tamper_index] = b' ';
+        std::fs::write(&path, bytes).expect("tamper");
+        assert!(ToolRegistry::load(&path).is_err());
+        std::fs::write(
+            path.with_extension("tmp"),
+            crate::canonical_bytes(&registry).expect("canonical"),
+        )
+        .expect("temporary snapshot");
+        std::fs::remove_file(&path).expect("remove primary");
+        assert_eq!(ToolRegistry::recover(&path).expect("recover"), registry);
     }
 }

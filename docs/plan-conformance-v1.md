@@ -15,7 +15,7 @@ financial, deployment, or scientific gates.
 | 3. Security benchmark | Eight local denial families over fit/tune/assessment labels and digest-only fault outcomes | Fixture only; held-out families and independent runners remain open |
 | 4. Alignment research | `alignment::PredictionLock` contract only | Design only; no model execution or causal/behavioral evidence |
 | 5. Safe learning | Local shadow/canary metadata in `governance` | Metadata only; no training, evaluator separation enforcement, serving, or canary |
-| 6. Runtime deployment | Typed `adapters::AdapterPlan` boundary that rejects external authorization | Not implemented; no sandbox, egress, secret broker, attestation, or incident drills |
+| 6. Runtime deployment | Typed `adapters::AdapterPlan` boundary that rejects external authorization, plus frozen/revocable tool manifest registry and canonical registry persistence | Not implemented; no sandbox, egress, secret broker, attestation, or incident drills |
 | 7. Governance | Local release state with immutable-base evidence cardinality checks and canonical persistence, plus digest-chained audit records | Partial; no authenticated release authority, recurring review, or public claim packet |
 
 ## Narrow compute bridge

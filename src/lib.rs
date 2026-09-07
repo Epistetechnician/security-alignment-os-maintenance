@@ -17,9 +17,12 @@ use thiserror::Error;
 
 pub mod adapters;
 pub mod alignment;
+pub mod artifacts;
 pub mod audit;
 pub mod benchmark;
 pub mod checker;
+pub mod contract;
+pub mod faults;
 pub mod governance;
 pub mod integration;
 pub mod market;
@@ -120,10 +123,56 @@ pub enum Action {
     Read,
     Write,
     Network,
+    Secrets,
     Spend,
     Replicate,
     SelfModify,
     Execute,
+}
+
+impl Action {
+    pub const fn all() -> [Self; 8] {
+        [
+            Self::Read,
+            Self::Write,
+            Self::Network,
+            Self::Secrets,
+            Self::Spend,
+            Self::Replicate,
+            Self::SelfModify,
+            Self::Execute,
+        ]
+    }
+}
+
+impl From<contract::Authority> for Action {
+    fn from(authority: contract::Authority) -> Self {
+        match authority {
+            contract::Authority::Read => Self::Read,
+            contract::Authority::Write => Self::Write,
+            contract::Authority::Network => Self::Network,
+            contract::Authority::Secrets => Self::Secrets,
+            contract::Authority::Spend => Self::Spend,
+            contract::Authority::Replicate => Self::Replicate,
+            contract::Authority::Execute => Self::Execute,
+            contract::Authority::SelfModify => Self::SelfModify,
+        }
+    }
+}
+
+impl From<Action> for contract::Authority {
+    fn from(action: Action) -> Self {
+        match action {
+            Action::Read => Self::Read,
+            Action::Write => Self::Write,
+            Action::Network => Self::Network,
+            Action::Secrets => Self::Secrets,
+            Action::Spend => Self::Spend,
+            Action::Replicate => Self::Replicate,
+            Action::Execute => Self::Execute,
+            Action::SelfModify => Self::SelfModify,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -318,6 +367,18 @@ impl ReplayJournal {
         journal.validate()?;
         Ok(journal)
     }
+    pub fn recover(path: &Path) -> Result<Self> {
+        match Self::load(path) {
+            Ok(journal) => Ok(journal),
+            Err(Error::Persistence(error)) if error.kind() == std::io::ErrorKind::NotFound => {
+                let temporary = path.with_extension("tmp");
+                let journal = Self::load(&temporary)?;
+                fs::rename(temporary, path)?;
+                Ok(journal)
+            }
+            Err(error) => Err(error),
+        }
+    }
 }
 
 struct Issuance {
@@ -480,6 +541,7 @@ impl Kernel {
             .lock()
             .map_err(|_| Error::Rejected("kernel lock poisoned".into()))?;
         let key = proposal.digest()?;
+        let current_policy_digest = self.policy_digest()?;
         let issuance = self
             .issuances
             .get_mut(&key)
@@ -489,6 +551,7 @@ impl Kernel {
             || decision.candidate_digest != issuance.candidate_digest
             || decision.decision_digest != issuance.decision_digest
             || decision.policy_digest != issuance.policy_digest
+            || decision.policy_digest != current_policy_digest
             || decision.capability.as_ref() != Some(&issuance.capability)
             || issuance.capability.expires_at <= now
         {
@@ -929,6 +992,28 @@ mod tests {
     }
 
     #[test]
+    fn default_policy_blocks_high_risk_capability_classes() {
+        let mut kernel = Kernel::new(Policy::default()).unwrap();
+        for (index, action) in [
+            Action::Network,
+            Action::Secrets,
+            Action::Spend,
+            Action::Replicate,
+            Action::SelfModify,
+            Action::Execute,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let mut candidate = proposal(&format!("blocked-{index}"));
+            candidate.action = action;
+            let decision = kernel.admit(&candidate, 10).unwrap();
+            assert_eq!(decision.kind, DecisionKind::Rejected);
+            assert!(decision.capability.is_none());
+        }
+    }
+
+    #[test]
     fn rejection_and_evidence_gates_are_fail_closed() {
         let mut kernel = Kernel::new(Policy::default()).unwrap();
         let mut runtime = Runtime::default();
@@ -962,6 +1047,11 @@ mod tests {
         noncanonical.extend(canonical);
         fs::write(&path, noncanonical).unwrap();
         assert!(ReplayJournal::load(&path).is_err());
+        journal.save(&path).unwrap();
+        let temporary = path.with_extension("tmp");
+        fs::copy(&path, &temporary).unwrap();
+        fs::remove_file(&path).unwrap();
+        assert_eq!(ReplayJournal::recover(&path).unwrap(), journal);
     }
 
     #[test]
@@ -1200,5 +1290,63 @@ mod tests {
         assert!(runtime.state.is_empty());
         assert!(runtime.is_frozen());
         assert!(!runtime.rollback("frozen"));
+    }
+
+    #[test]
+    fn coordinator_can_require_accepted_artifact_before_execution() {
+        let mut kernel = Kernel::new(Policy::default()).unwrap();
+        let mut runtime = Runtime::default();
+        let p = proposal("artifact-bound");
+        let subject = p.digest().unwrap();
+        let mut evidence = EvidenceRegistry::default();
+        evidence
+            .insert(Evidence {
+                id: "artifact-evidence".into(),
+                source_digest: subject,
+                operator_id: "operator".into(),
+                validator_id: "validator".into(),
+                reviewer_id: "".into(),
+                valid_until: 100,
+                accepted: false,
+                revoked: false,
+            })
+            .unwrap();
+        evidence.accept("artifact-evidence", "reviewer").unwrap();
+        let mut artifacts = artifacts::ArtifactRegistry::default();
+        let manifest = artifacts::ArtifactManifest {
+            artifact_id: "source-artifact".into(),
+            subject_digest: p.source_digest.clone(),
+            source_digest: "c".repeat(64),
+            license: "MIT".into(),
+            provenance_digest: "d".repeat(64),
+            custody_root: "/tmp/local-custody".into(),
+            retention_start: 0,
+            retention_until: 100,
+        };
+        artifacts
+            .quarantine(manifest, "operator", "validator")
+            .unwrap();
+        assert!(artifacts
+            .accept("source-artifact", &p.source_digest, "reviewer", 10)
+            .is_ok());
+        let result = integration::run_with_artifact(
+            &mut kernel,
+            &mut runtime,
+            integration::EvidenceBinding {
+                evidence: &evidence,
+                evidence_id: "artifact-evidence",
+                artifacts: &artifacts,
+                artifact_id: "source-artifact",
+            },
+            &p,
+            integration::Observation {
+                at: 10,
+                healthy: true,
+                telemetry_present: true,
+                kill_requested: false,
+            },
+        )
+        .unwrap();
+        assert_eq!(result.disposition, integration::Disposition::Completed);
     }
 }

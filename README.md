@@ -46,11 +46,14 @@ JavaScript runtime dependencies are installed.
 | `Kernel`, `ReplayJournal` | Exact issuer/candidate/policy binding, claim expiry, budgets, single-use execution, and atomic journal persistence |
 | `checker` | Independent local recomputation of replay, audit, and fixed-receipt invariants |
 | `EvidenceRegistry` | Subject-bound evidence, distinct local review roles, freshness, and revocation |
+| `artifacts` | Quarantined artifact manifests with subject/source/provenance digests, retention, review, and revocation |
+| `contract` | Explicit capability lattice, lifecycle transitions, and caller-owned failure budgets |
 | `Runtime`, `AuditJournal` | Reversible dictionary actions, terminal freeze/kill, and digest-chained audit persistence |
 | `specialist`, `memory` | Immutable identities, revocation, tenant consent, retrieval, redacted telemetry, and canonical durable memory |
 | `integration` | Evidence-bound workflow execution, observation, rollback, and freeze disposition |
 | `market` | Fixed local sum, result recomputation, binding/timeout checks, and unexecuted settlement proposal |
 | `governance` | Shadow/canary/local-release records with immutable base and phase evidence |
+| `faults` | Deterministic replay, stale-clock, stale-policy, malformed-bytes, partial-write, and kill/freeze scenarios |
 
 ## Boundaries
 
@@ -73,6 +76,10 @@ The local tests do not satisfy those gates.
 - [Integration and remaining gates](docs/integration-v1.md)
 - [Kernel](docs/kernel-v1.md)
 - [Evidence and evaluation](docs/evidence-evaluation-v1.md)
+- [Artifact manifests](docs/artifacts-v1.md)
+- [Phase 0 contract](docs/phase0-contract-v1.md)
+- [Fault injection](docs/fault-injection-v1.md)
+- [Plan conformance](docs/plan-conformance-v1.md)
 - [Runtime and specialist](docs/runtime-v1.md)
 - [Rust port status](docs/rust-port-v1.md)
 - [Source intake](docs/source-intake-v1.json)

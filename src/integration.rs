@@ -6,7 +6,10 @@
 //! are caller-supplied assertions; this module does not inspect a process,
 //! model, provider, network, or host security boundary.
 
-use crate::{digest, DecisionKind, EvidenceRegistry, Kernel, Proposal, Result, Runtime};
+use crate::{
+    artifacts::ArtifactRegistry, digest, DecisionKind, EvidenceRegistry, Kernel, Proposal, Result,
+    Runtime,
+};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -31,6 +34,13 @@ pub struct WorkflowResult {
     pub subject_digest: String,
     pub decision_digest: Option<String>,
     pub observation_digest: String,
+}
+
+pub struct EvidenceBinding<'a> {
+    pub evidence: &'a EvidenceRegistry,
+    pub evidence_id: &'a str,
+    pub artifacts: &'a ArtifactRegistry,
+    pub artifact_id: &'a str,
 }
 
 pub fn run(
@@ -63,7 +73,11 @@ pub fn run(
     runtime.execute(kernel, proposal, &decision, observation.at)?;
     if observation.kill_requested || !observation.healthy || !observation.telemetry_present {
         let rolled_back = runtime.rollback("unhealthy observation");
-        runtime.freeze("unhealthy observation");
+        if observation.kill_requested {
+            runtime.kill("kill observation");
+        } else {
+            runtime.freeze("unhealthy observation");
+        }
         return Ok(WorkflowResult {
             disposition: if rolled_back {
                 Disposition::RolledBack
@@ -81,4 +95,35 @@ pub fn run(
         decision_digest: Some(decision.decision_digest),
         observation_digest,
     })
+}
+
+pub fn run_with_artifact(
+    kernel: &mut Kernel,
+    runtime: &mut Runtime,
+    binding: EvidenceBinding<'_>,
+    proposal: &Proposal,
+    observation: Observation,
+) -> Result<WorkflowResult> {
+    let subject_digest = proposal.digest()?;
+    let observation_digest = digest(&observation)?;
+    if binding
+        .artifacts
+        .require_valid(binding.artifact_id, &proposal.source_digest, observation.at)
+        .is_err()
+    {
+        return Ok(WorkflowResult {
+            disposition: Disposition::Quarantined,
+            subject_digest,
+            decision_digest: None,
+            observation_digest,
+        });
+    }
+    run(
+        kernel,
+        runtime,
+        binding.evidence,
+        binding.evidence_id,
+        proposal,
+        observation,
+    )
 }

@@ -74,4 +74,16 @@ impl AuditJournal {
         journal.validate()?;
         Ok(journal)
     }
+    pub fn recover(path: &Path) -> Result<Self> {
+        match Self::load(path) {
+            Ok(journal) => Ok(journal),
+            Err(Error::Persistence(error)) if error.kind() == std::io::ErrorKind::NotFound => {
+                let temporary = path.with_extension("tmp");
+                let journal = Self::load(&temporary)?;
+                fs::rename(temporary, path)?;
+                Ok(journal)
+            }
+            Err(error) => Err(error),
+        }
+    }
 }

@@ -15,8 +15,9 @@ admission. The kernel records a digest-chained decision and issues a single-use
 capability. `Runtime::execute` validates the full capability and action payload,
 consumes authority immediately before the state commit, records a checkpoint,
 and retains metadata-only audit entries. `integration::run` returns a digest-only
-`WorkflowResult`; unhealthy, missing-telemetry, or kill-request observations
-roll back the latest checkpoint and freeze the runtime.
+`WorkflowResult`; unhealthy and missing-telemetry observations roll back the
+latest checkpoint and freeze the runtime, while an explicit kill request rolls
+back and marks the runtime killed.
 
 `run_local_workflow` remains a compact compatibility seam for callers that need
 only `quarantined`, `rejected`, or `completed` dispositions.
@@ -34,9 +35,9 @@ caller-owned, and deletion is logical deletion rather than secure erasure.
 
 `audit::AuditJournal` provides the corresponding caller-owned audit snapshot. It
 hashes event metadata and state digests into a canonical chain, validates the
-chain and canonical bytes on load, and uses atomic replacement for a selected
-destination. It does not provide authenticated authorship or cross-process
-append locking.
+chain and canonical bytes on load, supports temporary-snapshot recovery when
+the primary is absent, and uses atomic replacement for a selected destination.
+It does not provide authenticated authorship or cross-process append locking.
 
 `checker` independently recomputes replay, audit and fixed-receipt invariants
 for local regression. Its result is not independent acceptance evidence.
@@ -72,3 +73,7 @@ authorization in this foundation slice.
 These are unimplemented external gates, not passing results inferred from local
 fixtures. The local claim ceiling remains pure-data control and caller-owned
 persistence evidence.
+`integration::run_with_artifact` accepts an `EvidenceBinding` containing both
+references. It adds an accepted `ArtifactManifest` check that binds the
+proposal's source digest to the artifact subject before the same workflow
+proceeds.

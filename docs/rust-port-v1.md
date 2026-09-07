@@ -7,7 +7,8 @@ by the repository gate. The crate covers typed proposals, claim validation,
 admission, single-use capability consumption, digest-chained journals, accepted
 evidence, reversible runtime execution, freeze/kill, specialist consent,
 tool manifest drift, fixed compute receipts, shadow/canary governance, local
-benchmark families, prediction locks, and runtime audit persistence.
+benchmark families, prediction locks, artifact manifests, explicit Phase 0
+contracts, deterministic fault injection, and runtime audit persistence.
 
 The former Python implementation and test harness have been removed from the
 active repository. Rust is the only implementation and test surface under this

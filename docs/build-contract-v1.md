@@ -6,7 +6,7 @@ User request 2026-09-07 authorizes end-to-end local implementation and reuse of 
 
 ## Frozen seams
 
-Rust 1.77. Existing Proposal, Decision, Kernel::admit(proposal, now), and Runtime::execute(kernel, proposal, decision, now) are the canonical interfaces. New security checks may reject previously unsafe inputs. Kernel-owned consumption must happen immediately before runtime mutation. All local clocks are caller-supplied integer seconds; expiry is exclusive. Canonical digests are SHA-256 lowercase hex over canonical JSON. Evidence reviewer identities are local role assertions, not authenticated identities.
+Rust 1.77. Existing Proposal, Decision, Kernel::admit(proposal, now), and Runtime::execute(kernel, proposal, decision, now) are the canonical interfaces. `contract::CapabilitySet` and `contract::Lifecycle` freeze the authority lattice and lifecycle transition vocabulary. New security checks may reject previously unsafe inputs. Kernel-owned consumption must happen immediately before runtime mutation. All local clocks are caller-supplied integer seconds; expiry is exclusive. Canonical digests are SHA-256 lowercase hex over canonical JSON. Evidence reviewer identities are local role assertions, not authenticated identities.
 
 Evidence lane supplies `EvidenceRegistry::is_valid(evidence_id, now, subject_digest) -> bool` and `accept`/`revoke` transitions. `run_local_workflow` and `integration::run` accept an evidence reference before admission; raw claims alone never count as independently accepted evidence in the integrated workflow.
 
@@ -25,7 +25,7 @@ Each lane produces focused negative tests and a report naming touched slice, pub
 
 1. Freeze interfaces (this file).
 2. Harden kernel and durable audit contracts.
-3. Implement evidence provenance, locks and adversarial evaluation contracts.
+3. Implement evidence provenance, artifact manifests, locks and adversarial evaluation contracts.
 4. Implement local runtime lifecycle and specialist seam.
 5. Integrate proposal/evidence/admission/execution/observation/rollback.
-6. Test, independently review, document exact limitations.
+6. Test, independently review, inject deterministic failures, document exact limitations.

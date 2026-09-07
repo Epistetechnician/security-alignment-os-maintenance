@@ -25,6 +25,10 @@ State slice: `security-alignment-os-foundation-v1`.
 | Self-approval | reviewer/operator/validator separation | evidence registry regression tests |
 | Unaccepted evidence | integration quarantine | `rejection_and_evidence_gates_are_fail_closed` |
 | Continued local execution | terminal freeze/kill flags outside proposal data | runtime regression tests |
+| Artifact subject drift | exact subject digest and manifest lifecycle | artifact registry regressions |
+| Capability implication | explicit powerset lattice with no implicit edges | Phase 0 lattice tests |
+| Clock or policy drift | exclusive expiry and current policy digest check | fault-injection scenarios |
+| Partial local transition | checkpoint restore and digest-only outcome | partial-write fault scenario |
 
 ## Not established
 

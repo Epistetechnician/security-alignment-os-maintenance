@@ -30,8 +30,10 @@ Evidence(held)
   -> accepted evidence status
 ```
 
-Revocation, contradiction and expiry invalidate acceptance. Acceptance is not semantic proof. It is a local governance transition that
-records who reviewed which exact bytes.
+Revocation, contradiction and expiry invalidate acceptance. `artifacts::ArtifactManifest`
+adds source, license, provenance, custody-root and retention fields around an
+exact subject digest. Acceptance is not semantic proof. It is a local governance
+transition that records who reviewed which exact bytes.
 
 ## Risk flow
 
@@ -50,3 +52,5 @@ claim ceiling before execution.
 
 See [integration-v1.md](integration-v1.md) for specialist persistence,
 observations, rollback and downstream local release/compute contracts.
+See [plan-conformance-v1.md](plan-conformance-v1.md) for the phase gates and
+remaining external enforcement work.

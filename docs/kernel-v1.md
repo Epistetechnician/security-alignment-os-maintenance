@@ -9,7 +9,7 @@ The Rust public interfaces are:
 ```text
 Kernel::admit(proposal, now) -> Decision
 Kernel::consume(proposal, decision, now) -> bool
-ReplayJournal::save(path) / load(path)
+ReplayJournal::save(path) / load(path) / recover(path)
 ```
 
 An accepted decision is valid only when its private issuance record matches the
@@ -41,6 +41,10 @@ process isolation, network control, or a trusted clock. Reviewer and agent
 identities are local role assertions. The kernel does not authenticate model
 output, prove semantic correctness, establish alignment, or grant provider or
 financial authority.
+
+`recover(path)` promotes the canonical temporary snapshot only when the primary
+path is absent, covering a crash between temporary write and atomic rename. A
+present but malformed primary remains an error and is never silently replaced.
 
 Validation performed for this lane:
 

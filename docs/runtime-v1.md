@@ -35,6 +35,8 @@ the route is accepted only while the tenant consent grant and specialist
 identity are active, and the decision binds the exact input digest, grant,
 tenant, specialist identity digest, and expiry window. The seam does not
 classify raw prompts or invoke a model.
+Its issuance time must also be no earlier than the request and consent-grant
+issuance times, preventing pre-consent decision replay.
 
 `ToolRegistry` binds tool ID/version, implementation digest and a canonical
 sorted manifest-list digest. `freeze` captures the list digest and

@@ -131,6 +131,8 @@ impl RoutingDecision {
         if !request.active(now)
             || !grant.active(now)
             || self.issued_at > now
+            || self.issued_at < request.created_at
+            || self.issued_at < grant.issued_at
             || now >= self.expires_at
             || self.expires_at > request.expires_at
             || self.expires_at > grant.expires_at
@@ -220,5 +222,17 @@ mod tests {
         assert!(RoutingDecision::route(&registry, &grant, &request, 90).is_err());
         registry.revoke("specialist").expect("revoke");
         assert!(RoutingDecision::route(&registry, &grant, &request, 20).is_err());
+    }
+
+    #[test]
+    fn routing_rejects_decision_issued_before_request_or_consent() {
+        let (registry, grant, request) = setup();
+        let mut decision = RoutingDecision::route(&registry, &grant, &request, 20).expect("route");
+        decision.issued_at = 0;
+        assert!(decision.validate(&registry, &grant, &request, 20).is_err());
+
+        let mut decision = RoutingDecision::route(&registry, &grant, &request, 20).expect("route");
+        decision.issued_at = 5;
+        assert!(decision.validate(&registry, &grant, &request, 20).is_err());
     }
 }

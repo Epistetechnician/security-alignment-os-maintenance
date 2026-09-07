@@ -3,7 +3,8 @@
 State slice: `security-alignment-os-foundation-v1`.
 
 The kernel owns deterministic admission, capability issuance, decision
-validation, single-use reservation, and the digest-chained admission journal.
+validation, single-use reservation, policy validation, and the digest-chained
+admission journal.
 The Rust public interfaces are:
 
 ```text
@@ -21,7 +22,8 @@ runtime instances sharing a kernel cannot replay it. A runtime must call this
 method immediately before its own reversible mutation and mutate state only
 after a successful result.
 
-Candidate payloads remain caller-owned and may be mutable. A mutation after
+Malformed or later-mutated policy state is rejected before admission or
+consumption. Candidate payloads remain caller-owned and may be mutable. A mutation after
 admission changes the candidate digest and invalidates the issued decision.
 Issued token budgets and policy ceilings are snapshotted into immutable
 mappings. Budget checks are performed before broker state changes, including

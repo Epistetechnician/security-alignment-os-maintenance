@@ -248,6 +248,24 @@ impl Default for Policy {
     }
 }
 
+impl Policy {
+    pub fn validate(&self) -> Result<()> {
+        if self.token_ttl == 0
+            || self.allowed_scopes.is_empty()
+            || self.allowed_scopes.iter().any(|scope| {
+                scope.is_empty() || scope.chars().any(|character| character.is_control())
+            })
+            || self
+                .max_cost
+                .keys()
+                .any(|axis| axis.is_empty() || axis.chars().any(|character| character.is_control()))
+        {
+            return Err(Error::Invalid("policy is malformed".into()));
+        }
+        Ok(())
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct Capability {
     pub token_id: String,
@@ -404,6 +422,7 @@ pub struct Kernel {
 
 impl Kernel {
     pub fn new(policy: Policy) -> Result<Self> {
+        policy.validate()?;
         Ok(Self {
             policy,
             journal: ReplayJournal::default(),
@@ -415,6 +434,7 @@ impl Kernel {
         digest(&self.policy)
     }
     pub fn admit(&mut self, proposal: &Proposal, now: u64) -> Result<Decision> {
+        self.policy.validate()?;
         proposal.validate_shape(now)?;
         if proposal.requests_direct_authority {
             return self.record(
@@ -547,6 +567,7 @@ impl Kernel {
             .lock()
             .map_err(|_| Error::Rejected("kernel lock poisoned".into()))?;
         let key = proposal.digest()?;
+        self.policy.validate()?;
         let current_policy_digest = self.policy_digest()?;
         let issuance = self
             .issuances
@@ -1112,6 +1133,22 @@ mod tests {
             assert_eq!(decision.kind, DecisionKind::Rejected);
             assert!(decision.capability.is_none());
         }
+    }
+
+    #[test]
+    fn malformed_or_mutated_policy_cannot_issue_authority() {
+        let malformed = Policy {
+            token_ttl: 0,
+            ..Policy::default()
+        };
+        assert!(malformed.validate().is_err());
+        assert!(Kernel::new(malformed).is_err());
+
+        let mut kernel = Kernel::new(Policy::default()).unwrap();
+        let proposal = proposal("mutated-policy");
+        kernel.policy.token_ttl = 0;
+        assert!(kernel.admit(&proposal, 10).is_err());
+        assert!(kernel.journal.entries.is_empty());
     }
 
     #[test]

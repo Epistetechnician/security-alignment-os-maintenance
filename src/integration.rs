@@ -119,7 +119,13 @@ fn complete_admitted(
     observation_digest: String,
     observation: Observation,
 ) -> Result<WorkflowResult> {
-    runtime.execute(kernel, proposal, &decision, observation.at)?;
+    if let Err(error) = runtime.execute(kernel, proposal, &decision, observation.at) {
+        if kernel.lifecycle_state(&subject_digest) == Some(contract::LifecycleState::Admitted) {
+            kernel.quarantine(proposal)?;
+        }
+        observe_failure(kernel, runtime, contract::FailureKind::Quarantine)?;
+        return Err(error);
+    }
     if observation.kill_requested || !observation.healthy || !observation.telemetry_present {
         let rolled_back = runtime.rollback("unhealthy observation");
         if rolled_back {
@@ -354,6 +360,54 @@ mod tests {
         assert_eq!(
             kernel.lifecycle_state(&proposal.digest().expect("subject")),
             Some(crate::contract::LifecycleState::Completed)
+        );
+    }
+
+    #[test]
+    fn runtime_validation_failure_quarantines_admitted_proposal() {
+        let mut proposal = proposal();
+        proposal.payload.remove("key");
+        let mut evidence = EvidenceRegistry::default();
+        evidence.insert(evidence_for(&proposal)).expect("evidence");
+        let mut kernel = Kernel::new(Policy::default()).expect("kernel");
+        kernel
+            .configure_failure_budget(crate::contract::FailureBudget {
+                max_rejections: 10,
+                max_quarantines: 10,
+                max_rollbacks: 10,
+                max_consecutive_failures: 10,
+                max_window_failures: 10,
+                window_size: 10,
+            })
+            .expect("budget");
+        let mut runtime = Runtime::default();
+        let error = run(
+            &mut kernel,
+            &mut runtime,
+            &evidence,
+            "integration-receipt-evidence",
+            &proposal,
+            Observation {
+                at: 10,
+                healthy: true,
+                telemetry_present: true,
+                kill_requested: false,
+            },
+        )
+        .expect_err("malformed write must fail closed");
+        assert!(matches!(
+            error,
+            crate::Error::Rejected(message) if message == "write key missing"
+        ));
+        assert!(runtime.state.is_empty());
+        assert!(runtime.audit.is_empty());
+        assert_eq!(
+            kernel.lifecycle_state(&proposal.digest().expect("subject")),
+            Some(crate::contract::LifecycleState::Quarantined)
+        );
+        assert_eq!(
+            kernel.failure_tracker().map(|tracker| tracker.quarantines),
+            Some(1)
         );
     }
 

@@ -141,6 +141,7 @@ pub fn validate_audit(journal: &AuditJournal) -> Result<()> {
 
 pub fn validate_receipt(job: &SumJob, receipt: &SumReceipt, now: u64) -> Result<()> {
     let expected_program_digest = digest(&("fixed-integer-sum", 1u8))?;
+    let expected_output_schema_digest = digest(&("fixed-u64-output", 1u8))?;
     let output = job.inputs.iter().try_fold(0u64, |total, value| {
         total
             .checked_add(*value)
@@ -157,6 +158,9 @@ pub fn validate_receipt(job: &SumJob, receipt: &SumReceipt, now: u64) -> Result<
         || job.inputs.len() > 1024
         || job.deadline == 0
         || job.program_digest != expected_program_digest
+        || job.output_schema_digest != expected_output_schema_digest
+        || job.receipt_type != "ordinary-receipt-v1"
+        || job.privacy_requirement != "none"
         || receipt.provider.is_empty()
         || receipt
             .provider
@@ -168,8 +172,12 @@ pub fn validate_receipt(job: &SumJob, receipt: &SumReceipt, now: u64) -> Result<
         || receipt.job_digest != digest(job)?
         || receipt.program_digest != job.program_digest
         || receipt.input_digest != digest(&job.inputs)?
+        || receipt.output_schema_digest != job.output_schema_digest
+        || receipt.receipt_type != job.receipt_type
+        || receipt.privacy_requirement != job.privacy_requirement
         || !receipt.succeeded
         || receipt.output != output
+        || receipt.result_digest != digest(&(&job.program_digest, &job.inputs, output))?
         || receipt.price > job.max_price
         || !valid_digest(&receipt.job_digest)
         || !valid_digest(&receipt.program_digest)

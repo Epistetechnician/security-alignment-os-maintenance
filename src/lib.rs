@@ -1748,6 +1748,28 @@ mod tests {
     }
 
     #[test]
+    fn fixed_market_selects_typed_offer_and_binds_result_commitment() {
+        let job =
+            market::SumJob::new("offers".into(), "requester".into(), vec![4, 5], 100, 10).unwrap();
+        let offers = vec![
+            market::SumOffer::new(&job, "offer-a".into(), "provider-a".into(), 5, 10, 90).unwrap(),
+            market::SumOffer::new(&job, "offer-b".into(), "provider-b".into(), 3, 10, 90).unwrap(),
+        ];
+        let selected = market::select_offer(&job, &offers, 20).unwrap();
+        assert_eq!(selected.provider, "provider-b");
+        let receipt = market::execute_local_with_offer(&job, selected, 20).unwrap();
+        assert_eq!(receipt.provider, "provider-b");
+        assert_eq!(receipt.price, 3);
+        checker::validate_receipt(&job, &receipt, 20).unwrap();
+
+        let mut tampered = offers[1].clone();
+        tampered.result_digest = "f".repeat(64);
+        assert!(market::execute_local_with_offer(&job, &tampered, 20).is_err());
+        let mut verifier = market::ReceiptVerifier::default();
+        assert!(verifier.verify(&job, &receipt, 20).unwrap());
+    }
+
+    #[test]
     fn rust_audit_round_trip_and_governance_freeze() {
         let mut runtime = Runtime::default();
         runtime.kill("test");

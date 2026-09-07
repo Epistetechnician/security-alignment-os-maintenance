@@ -24,25 +24,39 @@ impl SumJob {
         max_price: u64,
     ) -> Result<Self> {
         let program_digest = digest(&("fixed-integer-sum", 1u8))?;
-        if job_id.is_empty()
-            || requester.is_empty()
-            || inputs.is_empty()
-            || inputs.len() > 1024
-            || deadline == 0
-        {
-            return Err(Error::Invalid("invalid fixed compute job".into()));
-        }
-        checked_sum(&inputs)?;
-        Ok(Self {
+        let job = Self {
             job_id,
             requester,
             inputs,
             deadline,
             max_price,
             program_digest,
-        })
+        };
+        job.validate()?;
+        Ok(job)
+    }
+
+    pub fn validate(&self) -> Result<()> {
+        let expected_program_digest = digest(&("fixed-integer-sum", 1u8))?;
+        if self.job_id.is_empty()
+            || self.job_id.chars().any(|character| character.is_control())
+            || self.requester.is_empty()
+            || self
+                .requester
+                .chars()
+                .any(|character| character.is_control())
+            || self.inputs.is_empty()
+            || self.inputs.len() > 1024
+            || self.deadline == 0
+            || self.program_digest != expected_program_digest
+        {
+            return Err(Error::Invalid("invalid fixed compute job".into()));
+        }
+        checked_sum(&self.inputs)?;
+        Ok(())
     }
     pub fn digest(&self) -> Result<String> {
+        self.validate()?;
         digest(self)
     }
 }
@@ -59,6 +73,33 @@ pub struct SumReceipt {
     pub succeeded: bool,
 }
 
+impl SumReceipt {
+    pub fn validate(&self, job: &SumJob, now: u64) -> Result<()> {
+        job.validate()?;
+        if self.provider.is_empty()
+            || self
+                .provider
+                .chars()
+                .any(|character| character.is_control())
+            || self.provider == job.requester
+            || self.completed_at > now
+            || now >= job.deadline
+            || self.job_digest != job.digest()?
+            || self.program_digest != job.program_digest
+            || self.input_digest != digest(&job.inputs)?
+            || !self.succeeded
+            || self.output != checked_sum(&job.inputs)?
+            || self.price > job.max_price
+            || !valid_digest(&self.job_digest)
+            || !valid_digest(&self.program_digest)
+            || !valid_digest(&self.input_digest)
+        {
+            return Err(Error::Rejected("fixed compute receipt is invalid".into()));
+        }
+        Ok(())
+    }
+}
+
 fn checked_sum(inputs: &[u64]) -> Result<u64> {
     inputs.iter().try_fold(0u64, |total, value| {
         total
@@ -68,6 +109,7 @@ fn checked_sum(inputs: &[u64]) -> Result<u64> {
 }
 
 pub fn execute_local(job: &SumJob, now: u64) -> Result<SumReceipt> {
+    job.validate()?;
     if now >= job.deadline {
         return Err(Error::Rejected("job expired".into()));
     }
@@ -92,18 +134,7 @@ pub struct ReceiptVerifier {
 
 impl ReceiptVerifier {
     pub fn verify(&mut self, job: &SumJob, receipt: &SumReceipt, now: u64) -> Result<bool> {
-        let valid = !receipt.provider.is_empty()
-            && receipt.provider != job.requester
-            && receipt.completed_at <= now
-            && now < job.deadline
-            && receipt.job_digest == job.digest()?
-            && receipt.program_digest == job.program_digest
-            && receipt.input_digest == digest(&job.inputs)?
-            && receipt.succeeded
-            && receipt.output == checked_sum(&job.inputs)?
-            && receipt.price <= job.max_price
-            && valid_digest(&receipt.job_digest);
-        if !valid {
+        if job.validate().is_err() || receipt.validate(job, now).is_err() {
             return Ok(false);
         }
         Ok(self.verified.insert(digest(receipt)?))

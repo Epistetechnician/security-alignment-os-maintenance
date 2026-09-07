@@ -77,10 +77,11 @@ authenticate the host or make the signer independent.
 
 ## Downstream local contracts
 
-`market::SumJob` accepts one fixed non-negative integer-sum job class. A separate
-verifier recomputes the result, checks program/input/time/price/status bindings,
-rejects a repeated receipt digest, and permits one unexecuted settlement
-proposal. No provider, wallet, chain,
+`market::SumJob` accepts one fixed non-negative integer-sum job class and
+revalidates its immutable program identity on every digest or execution path.
+`SumReceipt` and a separate verifier recompute the result, check
+program/input/time/price/status bindings, reject a repeated receipt digest, and
+permit one unexecuted settlement proposal. No provider, wallet, chain,
 zero-knowledge, FHE, or MPC workload runs.
 
 `governance::ReleaseRegistry` preserves an immutable base and rollback target.

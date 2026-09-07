@@ -106,12 +106,28 @@ pub fn validate_audit(journal: &AuditJournal) -> Result<()> {
 }
 
 pub fn validate_receipt(job: &SumJob, receipt: &SumReceipt, now: u64) -> Result<()> {
+    let expected_program_digest = digest(&("fixed-integer-sum", 1u8))?;
     let output = job.inputs.iter().try_fold(0u64, |total, value| {
         total
             .checked_add(*value)
             .ok_or_else(|| Error::Rejected("independent receipt sum overflow".into()))
     })?;
-    if receipt.provider.is_empty()
+    if job.job_id.is_empty()
+        || job.job_id.chars().any(|character| character.is_control())
+        || job.requester.is_empty()
+        || job
+            .requester
+            .chars()
+            .any(|character| character.is_control())
+        || job.inputs.is_empty()
+        || job.inputs.len() > 1024
+        || job.deadline == 0
+        || job.program_digest != expected_program_digest
+        || receipt.provider.is_empty()
+        || receipt
+            .provider
+            .chars()
+            .any(|character| character.is_control())
         || receipt.provider == job.requester
         || receipt.completed_at > now
         || now >= job.deadline
@@ -122,6 +138,8 @@ pub fn validate_receipt(job: &SumJob, receipt: &SumReceipt, now: u64) -> Result<
         || receipt.output != output
         || receipt.price > job.max_price
         || !valid_digest(&receipt.job_digest)
+        || !valid_digest(&receipt.program_digest)
+        || !valid_digest(&receipt.input_digest)
     {
         return Err(Error::Rejected("independent receipt check failed".into()));
     }

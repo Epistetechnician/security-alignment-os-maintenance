@@ -1358,6 +1358,19 @@ mod tests {
     }
 
     #[test]
+    fn fixed_compute_identity_cannot_drift_after_construction() {
+        let mut job =
+            market::SumJob::new("fixed-job".into(), "requester".into(), vec![4, 5], 100, 0)
+                .unwrap();
+        let receipt = market::execute_local(&job, 10).unwrap();
+        job.program_digest = "e".repeat(64);
+        assert!(job.validate().is_err());
+        assert!(market::execute_local(&job, 10).is_err());
+        let mut verifier = market::ReceiptVerifier::default();
+        assert!(!verifier.verify(&job, &receipt, 10).unwrap());
+    }
+
+    #[test]
     fn rust_audit_round_trip_and_governance_freeze() {
         let mut runtime = Runtime::default();
         runtime.kill("test");

@@ -86,14 +86,17 @@ authenticate the host or make the signer independent.
 
 ## Downstream local contracts
 
-`market::SumJob` accepts one fixed non-negative integer-sum job class and
-revalidates its immutable program identity on every digest or execution path.
+`market::SumJob` accepts one fixed non-negative integer-sum job class and binds
+the exact input commitment, output schema, ordinary receipt type, privacy
+requirement, price ceiling, deadline, and immutable program identity. Typed
+`SumOffer` records bind to the exact job digest, fixed runtime and result
+commitment; selection is deterministic by price, provider, and offer ID.
 `SumReceipt` and a separate verifier recompute the result, check
 program/input/time/price/status bindings, reject a repeated receipt digest, and
-permit one unexecuted settlement proposal. Settlement revalidates the receipt
-against the exact job, and the verifier's verified/reserved sets support
-canonical caller-owned save/load/recovery. No provider, wallet, chain,
-zero-knowledge, FHE, or MPC workload runs.
+permit one typed `SettlementProposal` only after local verification. The
+proposal remains `AuthorizationRequired`; no payment path exists. The
+verifier's verified/reserved sets support canonical caller-owned save/load/
+recovery. No provider, wallet, chain, zero-knowledge, FHE, or MPC workload runs.
 
 `governance::ReleaseRegistry` preserves an immutable base and rollback target.
 Shadow and canary advances require the candidate's first evidence digest, then a

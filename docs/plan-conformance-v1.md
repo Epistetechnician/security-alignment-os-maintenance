@@ -21,8 +21,10 @@ financial, deployment, or scientific gates.
 ## Narrow compute bridge
 
 `market::SumJob` is the first wedge described by the pasted thesis: one fixed
-program identity, committed input digest, deadline, price ceiling, recomputed
-output, immutable identity revalidation, and an unexecuted settlement proposal.
+program identity, committed input digest, output schema, ordinary receipt type,
+privacy requirement, deadline, price ceiling, recomputed output, exact-job typed
+offers, immutable identity revalidation, and an authorization-required typed
+settlement proposal.
 It is intentionally local. No
 Hyperliquid, Boundless, HEIR, Arcium, ZK proof, FHE/MPC runtime, provider bid,
 wallet, or settlement transaction is integrated.

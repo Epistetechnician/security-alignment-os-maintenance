@@ -34,7 +34,9 @@ records `Admitted` before `Executing`, then `Committed`, `RolledBack`, or
 `Quarantined`. A restart converts any latest admitted or executing transaction
 to `Quarantined`, marks the journal frozen, and never reconstructs a consumed
 kernel issuance. The broker continues serving `Frozen` responses so callers
-can observe containment.
+can observe containment. The independent checker replays the hash chain,
+transaction transitions, request identity continuity, and agent/nonce replay
+constraints from the persisted bytes.
 
 The supervisor writes a create-new staging file, syncs it, rechecks the source
 digest and destination absence, and atomically renames the staged bytes. The

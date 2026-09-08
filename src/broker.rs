@@ -1164,6 +1164,7 @@ fn sandbox_command(
             "--pid",
             "--fork",
             "--mount-proc",
+            "--kill-child=KILL",
         ])
         .arg(supervisor)
         .arg("--job")

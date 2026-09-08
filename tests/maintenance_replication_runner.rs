@@ -11,6 +11,7 @@ use security_alignment_os::STATE_SLICE;
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
+use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tempfile::{tempdir, TempDir};
 
@@ -149,4 +150,40 @@ fn seed_generation_never_overwrites_existing_key_material() {
     mode(&seed, 0o600);
     assert!(generate_seed_file(&seed, 9).is_err());
     assert_eq!(fs::read(seed).unwrap(), [7_u8; 32]);
+}
+
+#[test]
+fn custody_scoped_keygen_commands_do_not_mix_seed_roles() {
+    let root = tempdir().unwrap();
+    mode(&root.path().to_path_buf(), 0o700);
+    let evaluator = root.path().join("evaluator");
+    let host = root.path().join("host");
+
+    let evaluator_output = Command::new(env!("CARGO_BIN_EXE_maintenance_replication_runner"))
+        .args(["keygen-evaluator", evaluator.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(evaluator_output.status.success());
+    assert!(evaluator.join("evaluator.seed").is_file());
+    assert!(!evaluator.join("host.seed").exists());
+    assert!(!evaluator.join("operator.seed").exists());
+
+    let host_output = Command::new(env!("CARGO_BIN_EXE_maintenance_replication_runner"))
+        .args(["keygen-host", host.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(host_output.status.success());
+    assert!(!host.join("evaluator.seed").exists());
+    assert!(host.join("host.seed").is_file());
+    assert!(host.join("operator.seed").is_file());
+    for seed in [
+        evaluator.join("evaluator.seed"),
+        host.join("host.seed"),
+        host.join("operator.seed"),
+    ] {
+        assert_eq!(
+            fs::metadata(seed).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+    }
 }

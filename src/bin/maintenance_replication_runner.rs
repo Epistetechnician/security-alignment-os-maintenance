@@ -4,6 +4,8 @@
 //!
 //! Usage:
 //!   maintenance_replication_runner keygen KEY_DIR
+//!   maintenance_replication_runner keygen-evaluator KEY_DIR
+//!   maintenance_replication_runner keygen-host KEY_DIR
 //!   maintenance_replication_runner freeze CHECKOUT OUTPUT REQUEST_ID LEASE_EXPIRES_AT NONCE
 //!   maintenance_replication_runner init CHECKOUT ARTIFACT_DIR BROKER EVALUATOR EVALUATOR_SEED HOST_ID OPERATOR_ID HOST_SEED OPERATOR_SEED IMPLEMENTATION_REVISION LEASE_EXPIRES_AT NONCE CONTENTION_ROLE SPEC_OUTPUT
 //!   maintenance_replication_runner report SPEC
@@ -22,6 +24,8 @@ fn usage() -> ! {
     eprintln!(
         "usage:
   maintenance_replication_runner keygen KEY_DIR
+  maintenance_replication_runner keygen-evaluator KEY_DIR
+  maintenance_replication_runner keygen-host KEY_DIR
   maintenance_replication_runner freeze CHECKOUT OUTPUT REQUEST_ID LEASE_EXPIRES_AT NONCE
   maintenance_replication_runner init CHECKOUT ARTIFACT_DIR BROKER EVALUATOR EVALUATOR_SEED HOST_ID OPERATOR_ID HOST_SEED OPERATOR_SEED IMPLEMENTATION_REVISION LEASE_EXPIRES_AT NONCE CONTENTION_ROLE SPEC_OUTPUT
   maintenance_replication_runner report SPEC
@@ -89,6 +93,24 @@ fn emit(output: Output<'_>) {
     );
 }
 
+fn prepare_key_directory(directory: &Path) -> Result<()> {
+    fs::create_dir_all(directory)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(directory, fs::Permissions::from_mode(0o700))?;
+    }
+    Ok(())
+}
+
+fn create_keygen_output(directory: PathBuf, seeds: &[(&str, u8)]) -> Result<()> {
+    prepare_key_directory(&directory)?;
+    for (name, marker) in seeds {
+        generate_seed_file(&directory.join(name), *marker)?;
+    }
+    Ok(())
+}
+
 fn parse_role(
     value: String,
 ) -> Result<security_alignment_os::maintenance_replication::ScenarioRole> {
@@ -109,17 +131,50 @@ fn main() {
         let result = match command.as_deref() {
             Some("keygen") => {
                 let directory = path(next(&mut args, "key directory")?, "key directory")?;
-                fs::create_dir_all(&directory)?;
-                #[cfg(unix)]
-                {
-                    use std::os::unix::fs::PermissionsExt;
-                    fs::set_permissions(&directory, fs::Permissions::from_mode(0o700))?;
+                if args.next().is_some() {
+                    usage();
                 }
-                generate_seed_file(&directory.join("evaluator.seed"), 1)?;
-                generate_seed_file(&directory.join("host.seed"), 2)?;
-                generate_seed_file(&directory.join("operator.seed"), 3)?;
+                create_keygen_output(
+                    directory.clone(),
+                    &[
+                        ("evaluator.seed", 1),
+                        ("host.seed", 2),
+                        ("operator.seed", 3),
+                    ],
+                )?;
                 emit(Output {
                     status: "keys_created",
+                    verdict: None,
+                    path: Some(directory.display().to_string()),
+                    id: None,
+                });
+                Ok(())
+            }
+            Some("keygen-evaluator") => {
+                let directory = path(
+                    next(&mut args, "evaluator key directory")?,
+                    "evaluator key directory",
+                )?;
+                if args.next().is_some() {
+                    usage();
+                }
+                create_keygen_output(directory.clone(), &[("evaluator.seed", 1)])?;
+                emit(Output {
+                    status: "evaluator_key_created",
+                    verdict: None,
+                    path: Some(directory.display().to_string()),
+                    id: None,
+                });
+                Ok(())
+            }
+            Some("keygen-host") => {
+                let directory = path(next(&mut args, "host key directory")?, "host key directory")?;
+                if args.next().is_some() {
+                    usage();
+                }
+                create_keygen_output(directory.clone(), &[("host.seed", 2), ("operator.seed", 3)])?;
+                emit(Output {
+                    status: "host_operator_keys_created",
                     verdict: None,
                     path: Some(directory.display().to_string()),
                     id: None,

@@ -16,14 +16,22 @@ the fixed Markdown operation. The following commands use absolute paths:
 
 ~~~text
 maintenance_replication_runner keygen KEY_DIR
+maintenance_replication_runner keygen-evaluator KEY_DIR
+maintenance_replication_runner keygen-host KEY_DIR
 maintenance_replication_runner init CHECKOUT ARTIFACT_DIR BROKER EVALUATOR EVALUATOR_SEED HOST_ID OPERATOR_ID HOST_SEED OPERATOR_SEED IMPLEMENTATION_REVISION LEASE_EXPIRES_AT NONCE CONTENTION_ROLE SPEC_OUTPUT
 maintenance_replication_runner report SPEC_OUTPUT
 maintenance_replication_runner packet FROZEN_BUNDLE REPORT_A REPORT_B PACKET_OUTPUT
 ~~~
 
-keygen is a convenience for local setup and creates owner-only evaluator, host,
-and operator seed files. Independent operators must generate and retain their
-own keys independently; the generated files must not be exchanged. init
+keygen is a convenience for single-operator local setup and creates owner-only
+evaluator, host, and operator seed files. `keygen-evaluator` creates only the
+evaluator seed, while `keygen-host` creates only the host and operator seeds.
+Use the scoped commands when evaluator custody and Host B operator custody are
+administered separately. The evaluator authority must provision the same
+evaluator seed to both hosts through its authenticated custody procedure; Host
+A and Host B must not copy evaluator, host, or operator seeds to one another.
+Independent operators must generate and retain their own host and operator keys
+independently. init
 freezes the request and complete baseline manifest into the runner
 specification. The implementation revision is an operator-supplied, exact
 40-character lowercase revision binding and must be checked against the source
@@ -46,6 +54,26 @@ The runner uses the process's operator-only deterministic failpoints to
 reproduce crash, cancellation, expiry, contention, and replacement-lock
 scenarios. Those controls are test harness inputs; they do not grant authority
 and must not be used to represent an operational maintenance request.
+
+## Host B handoff checklist
+
+Host B is not created by this repository. Before accepting its report, the
+external operator must authenticate all of the following out of band:
+
+- Host B is a Linux system independently administered from Host A, with a
+  distinct operator identity and separate private custody for its checkout,
+  evaluator seed, host/operator seeds, and raw evidence.
+- Host B checks out the exact implementation revision and independently
+  recomputes the toolchain digest, evaluator executable digest, frozen request
+  digest, and baseline manifest digest.
+- Host B runs all 20 scenarios with the same frozen bundle, evaluator public
+  key, evaluator inputs/tests/policy, process version, lease, and nonce.
+- Only the canonical frozen bundle and signed `report.json` are exchanged for
+  packet assembly. Seeds and raw evidence remain with their original custodians.
+
+Distinct labels and signatures in a packet are insufficient to authenticate
+these properties. If any checklist item is unavailable or unverifiable, the
+packet remains `Inconclusive`.
 
 ## Boundary
 

@@ -75,6 +75,12 @@ state directories sharing a checkout writer fence, and replacement-lock
 ownership, in addition to the existing exact completion, replay, proposal,
 cancellation, path/link, crash, and configuration-substitution cases.
 
+The separate-host replication contract is implemented in
+`maintenance_replication.rs`. Its eight contract tests bind two signed reports
+to the same fixed request, process revision, full-checkout baseline, and exact
+containment/recovery matrix. They are local wire-contract tests; they do not
+count as separate-host execution or authenticated operator evidence.
+
 The results establish containment and recovery for the tested local host and
 fixed operation only. They do not establish arbitrary syscall containment,
 same-UID hostile-process isolation, separate-host replication, deployment

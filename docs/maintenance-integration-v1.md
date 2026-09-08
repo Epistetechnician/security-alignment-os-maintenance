@@ -45,8 +45,11 @@ real broker before claiming enforced useful maintenance.
 
 ## Subsequent gates
 
-1. Independent replication: a separate operator and host reproduce the exact
-   frozen containment/recovery packet and sign their own results.
+1. Independent replication: use the [separate-host replication
+   contract](maintenance-replication-v1.md) to require a separate operator and
+   host to reproduce the exact frozen containment/recovery packet and sign
+   their own results. The contract is implemented locally; actual second-host
+   reproduction remains open.
 2. Shadow adaptation: candidate updates compete against an immutable baseline
    on locked evaluations; independent authority controls promotion and rollback.
 3. Causal research: separately accepted preregistration, custody, identity, and

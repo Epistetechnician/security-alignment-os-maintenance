@@ -87,6 +87,7 @@ satisfy those gates.
 
 ## Build records
 
+- [Repository maintenance integration and ordered exit gates](docs/maintenance-integration-v1.md)
 - [Frozen contract](docs/build-contract-v1.md)
 - [Integration and remaining gates](docs/integration-v1.md)
 - [Kernel](docs/kernel-v1.md)

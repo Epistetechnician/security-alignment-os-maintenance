@@ -29,6 +29,7 @@ pub mod execution_gate;
 pub mod faults;
 pub mod governance;
 pub mod integration;
+pub mod maintenance;
 pub mod market;
 pub mod memory;
 pub mod property;

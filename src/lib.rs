@@ -30,6 +30,7 @@ pub mod faults;
 pub mod governance;
 pub mod integration;
 pub mod maintenance;
+pub mod maintenance_process;
 pub mod market;
 pub mod memory;
 pub mod property;

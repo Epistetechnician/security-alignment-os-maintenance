@@ -24,6 +24,13 @@ rollback need transaction-bound requests and terminal result receipts; the
 present Hello/Execute interface has neither. A workflow test executor cannot
 substitute for those enforcement operations.
 
+The next implementation is a separate, fixed-operation
+[maintenance process boundary](maintenance-process-v1.md). It preserves the
+existing broker protocol and exercises signed evaluation and durable mutation
+for a single Markdown whitespace task. Its private-checkout trust boundary is
+explicit; it does not inherit the existing supervisor's sandbox or implement a
+generic patch lease.
+
 ## Integration exit gate
 
 Run one useful single-file maintenance task in an isolated checkout. Independently

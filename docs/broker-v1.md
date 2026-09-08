@@ -44,7 +44,9 @@ removes the destination when possible, records rollback, and freezes further
 admission. On macOS the backend uses `/usr/bin/sandbox-exec` with network and
 file-write denial plus an exact supervisor executable allowance. On Linux it
 uses an unprivileged user, network, and PID namespace through `unshare`; if
-that primitive is unavailable the request fails closed.
+that primitive is unavailable the request fails closed. The Linux invocation
+also uses `--kill-child=KILL`, so terminating the namespace wrapper terminates
+the supervised process tree.
 
 `broker_adversarial_runner` is a separate Rust client. It checks direct
 supervisor invocation without a launch token, path escape, replay, forged

@@ -24,8 +24,9 @@ can stage output.
 On successful completion the broker returns both the pre-execution
 `CapabilityReceipt` and a post-validation `ExecutionReceipt`. The latter is
 signed by the same broker-only key and binds the capability receipt ID,
-decision digest, evidence ID, input digest, operation ID, output digest, and
-expiry. A client can verify this result with `ReceiptVerifier::verify_execution`
+decision digest, evidence ID and evidence record digest, input digest,
+operation ID, output digest, and expiry. A client can verify this result with
+`ReceiptVerifier::verify_execution`
 or the independent `checker::validate_execution_receipt` without recreating
 the broker's private key or trusting an unsigned output message.
 

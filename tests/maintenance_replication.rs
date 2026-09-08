@@ -54,9 +54,13 @@ fn scenarios(
                 | "pre-admission-cancellation"
                 | "evaluator-requirement-substitution"
                 | "path-escape"
-                | "link-escape"
                 | "evaluation-expiry" => (
                     ScenarioStatus::Quarantined,
+                    None,
+                    RecoveryDisposition::NoMutation,
+                ),
+                "link-escape" => (
+                    ScenarioStatus::ProcessError,
                     None,
                     RecoveryDisposition::NoMutation,
                 ),

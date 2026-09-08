@@ -32,6 +32,7 @@ pub mod integration;
 pub mod maintenance;
 pub mod maintenance_process;
 pub mod maintenance_replication;
+pub mod maintenance_replication_runner;
 pub mod market;
 pub mod memory;
 pub mod property;

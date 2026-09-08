@@ -59,6 +59,7 @@ JavaScript runtime dependencies are installed.
 | `broker`, `capability_broker`, `capability_supervisor` | Separate Unix IPC broker, broker-only receipt issuer, staged uppercase file transformation, canonical journal, timeout/kill path, network-denied host sandbox, and frozen crash recovery |
 | `broker_adversarial_runner` | Separate hostile client for direct supervisor, path escape, replay, forged receipt, malformed child operation, and telemetry containment attempts |
 | `maintenance_replication` | Canonical, signed two-report packet for the fixed maintenance containment/recovery matrix; no host attestation or second-host execution |
+| `maintenance_replication_runner` | Operator-controlled freeze, isolated 20-scenario real-process execution, private evidence capture, signed host-report production, and packet assembly |
 | `maintenance_replication_verifier` | Digest-only validator for an exchanged replication packet; it performs no maintenance or network execution |
 | `schema` | Versioned schema identities with exact digest-bound lookup and canonical recovery |
 | `Runtime`, `AuditJournal` | Reversible dictionary actions, terminal freeze/kill, and digest-chained audit persistence |
@@ -92,6 +93,7 @@ satisfy those gates.
 - [Repository maintenance integration and ordered exit gates](docs/maintenance-integration-v1.md)
 - [Fixed maintenance broker and evaluator process](docs/maintenance-process-v1.md)
 - [Separate-host maintenance replication contract](docs/maintenance-replication-v1.md)
+- [Maintenance replication runner](docs/maintenance-replication-runner-v1.md)
 - [Frozen contract](docs/build-contract-v1.md)
 - [Integration and remaining gates](docs/integration-v1.md)
 - [Kernel](docs/kernel-v1.md)

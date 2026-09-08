@@ -289,7 +289,6 @@ fn expected_scenario(
         | "pre-admission-cancellation"
         | "evaluator-requirement-substitution"
         | "path-escape"
-        | "link-escape"
         | "evaluation-expiry" => Some((
             ScenarioStatus::Quarantined,
             None,
@@ -298,6 +297,11 @@ fn expected_scenario(
             } else {
                 RecoveryDisposition::NoMutation
             },
+        )),
+        "link-escape" => Some((
+            ScenarioStatus::ProcessError,
+            None,
+            RecoveryDisposition::NoMutation,
         )),
         "pre-finalization-cancellation" | "pre-finalization-expiry" => Some((
             ScenarioStatus::RolledBack,

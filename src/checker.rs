@@ -7,6 +7,7 @@
 //! not authenticated independent acceptance or proof of an external executor.
 
 use crate::audit::AuditJournal;
+use crate::broker::{BrokerJournal, TransactionStatus, JOURNAL_VERSION};
 use crate::contract::{Lifecycle, LifecycleState};
 use crate::market::{SumJob, SumReceipt};
 use crate::receipts::{CapabilityReceipt, ExecutionReceipt};
@@ -17,6 +18,7 @@ use crate::{
 use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
+use std::path::{Component, Path};
 
 const RECEIPT_VERSION: u8 = 1;
 const SIGNATURE_LEN: usize = 64;
@@ -153,6 +155,122 @@ struct ExecutionReceiptSigningPayload<'a> {
 
 fn valid_text(value: &str) -> bool {
     !value.is_empty() && value.len() <= 256 && !value.chars().any(char::is_control)
+}
+
+fn valid_relative_path(value: &str) -> bool {
+    valid_text(value)
+        && Path::new(value)
+            .components()
+            .all(|component| matches!(component, Component::Normal(_)))
+}
+
+/// Independently validates the broker's hash chain and transaction state
+/// machine. This duplicates the journal equations rather than calling the
+/// broker producer validator, so callers can review durable admission and
+/// recovery records from a separate code path.
+pub fn validate_broker_journal(journal: &BrokerJournal) -> Result<()> {
+    if journal.version != JOURNAL_VERSION {
+        return Err(Error::Journal(
+            "independent broker journal version invalid".into(),
+        ));
+    }
+    let mut previous = "0".repeat(64);
+    let mut latest = BTreeMap::<String, TransactionStatus>::new();
+    for (index, event) in journal.entries.iter().enumerate() {
+        if event.sequence != index as u64
+            || event.previous_digest != previous
+            || !valid_digest(&event.request_digest)
+            || !valid_text(&event.agent_id)
+            || event.nonce == 0
+            || event
+                .destination_relpath
+                .as_ref()
+                .is_some_and(|value| !valid_relative_path(value))
+            || event
+                .decision_digest
+                .as_ref()
+                .is_some_and(|value| !valid_digest(value))
+            || event
+                .capability_token_id
+                .as_ref()
+                .is_some_and(|value| !valid_digest(value))
+            || event
+                .output_digest
+                .as_ref()
+                .is_some_and(|value| !valid_digest(value))
+            || !valid_digest(&event.entry_digest)
+        {
+            return Err(Error::Journal(
+                "independent broker journal event is malformed".into(),
+            ));
+        }
+        let prior = latest.get(&event.request_digest).copied();
+        let allowed = matches!(
+            (prior, event.status),
+            (None, TransactionStatus::Admitted)
+                | (
+                    None,
+                    TransactionStatus::Rejected | TransactionStatus::Quarantined
+                )
+                | (
+                    Some(TransactionStatus::Admitted),
+                    TransactionStatus::Executing
+                )
+                | (
+                    Some(TransactionStatus::Admitted),
+                    TransactionStatus::Quarantined
+                )
+                | (
+                    Some(TransactionStatus::Executing),
+                    TransactionStatus::Committed
+                )
+                | (
+                    Some(TransactionStatus::Executing),
+                    TransactionStatus::RolledBack
+                )
+                | (
+                    Some(TransactionStatus::Executing),
+                    TransactionStatus::Quarantined
+                )
+        );
+        if !allowed {
+            return Err(Error::Journal(
+                "independent broker transaction transition invalid".into(),
+            ));
+        }
+        let material = (
+            event.sequence,
+            event.previous_digest.clone(),
+            event.request_digest.clone(),
+            event.agent_id.clone(),
+            event.nonce,
+            event.destination_relpath.clone(),
+            event.decision_digest.clone(),
+            event.capability_token_id.clone(),
+            event.status,
+            event.output_digest.clone(),
+        );
+        if digest(&material)? != event.entry_digest {
+            return Err(Error::Journal(
+                "independent broker journal digest mismatch".into(),
+            ));
+        }
+        previous = event.entry_digest.clone();
+        latest.insert(event.request_digest.clone(), event.status);
+    }
+    if journal.frozen
+        && latest.values().any(|status| {
+            matches!(
+                status,
+                TransactionStatus::Admitted | TransactionStatus::Executing
+            )
+        })
+    {
+        return Err(Error::Journal(
+            "frozen broker journal retains in-flight authority".into(),
+        ));
+    }
+    Ok(())
 }
 
 pub fn validate_replay(journal: &ReplayJournal) -> Result<()> {

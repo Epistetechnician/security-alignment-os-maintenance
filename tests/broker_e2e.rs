@@ -38,6 +38,8 @@ fn crash_recovery_freezes_in_flight_transaction_without_recreating_authority() {
     let _ = crashed.wait();
     let journal_path = directory.path().join("journal.json");
     let journal = BrokerJournal::load(&journal_path).expect("durable journal");
+    security_alignment_os::checker::validate_broker_journal(&journal)
+        .expect("independent journal check");
     let request_digest = authorized
         .to_proposal()
         .expect("proposal")
@@ -53,6 +55,8 @@ fn crash_recovery_freezes_in_flight_transaction_without_recreating_authority() {
     let (mut recovered, recovery_client) =
         start_broker(&directory, &registry, supervisor, false, false);
     let recovered_journal = BrokerJournal::load(&journal_path).expect("recovered journal");
+    security_alignment_os::checker::validate_broker_journal(&recovered_journal)
+        .expect("independent recovered journal check");
     assert_eq!(
         recovered_journal.status(&request_digest),
         Some(TransactionStatus::Quarantined)
@@ -91,15 +95,19 @@ fn post_rename_crash_recovery_removes_uncommitted_destination() {
         .expect("proposal")
         .digest()
         .expect("digest");
+    let journal = BrokerJournal::load(&journal_path).expect("journal");
+    security_alignment_os::checker::validate_broker_journal(&journal)
+        .expect("independent in-flight journal check");
     assert_eq!(
-        BrokerJournal::load(&journal_path)
-            .expect("journal")
-            .status(&request_digest),
+        journal.status(&request_digest),
         Some(TransactionStatus::Executing)
     );
 
     let (mut recovered, recovery_client) =
         start_broker(&directory, &registry, supervisor, false, false);
+    let recovered_journal = BrokerJournal::load(&journal_path).expect("recovered journal");
+    security_alignment_os::checker::validate_broker_journal(&recovered_journal)
+        .expect("independent recovered journal check");
     assert!(
         !destination.exists(),
         "recovery must remove uncommitted output"
@@ -261,6 +269,23 @@ fn broker_process_commits_authorized_transform_and_rejects_replay() {
     assert_eq!(
         fs::read(directory.path().join("output-1.txt")).expect("output"),
         b"HELLO BROKER\n"
+    );
+    let committed_journal =
+        BrokerJournal::load(&directory.path().join("journal.json")).expect("committed journal");
+    security_alignment_os::checker::validate_broker_journal(&committed_journal)
+        .expect("independent committed journal check");
+    let mut tampered_journal = committed_journal.clone();
+    tampered_journal.entries[0].agent_id.push_str("-tampered");
+    assert!(security_alignment_os::checker::validate_broker_journal(&tampered_journal).is_err());
+    assert_eq!(
+        committed_journal.status(
+            &authorized
+                .to_proposal()
+                .expect("proposal")
+                .digest()
+                .expect("digest")
+        ),
+        Some(TransactionStatus::Committed)
     );
     let mut forged = receipt.clone();
     forged.signature[0] ^= 1;

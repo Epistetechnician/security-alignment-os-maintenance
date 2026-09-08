@@ -7,6 +7,9 @@ use security_alignment_os::digest_bytes;
 use security_alignment_os::maintenance_process::{
     fixed_input_digest, fixed_policy_digest, fixed_tests_digest,
 };
+use std::fs;
+use std::process::{Command, Output};
+use tempfile::tempdir;
 
 fn public_key_hex(seed: u8) -> String {
     SigningKey::from_bytes(&[seed; 32])
@@ -180,4 +183,49 @@ fn reports_must_bind_the_same_fixed_request_and_revision() {
         .sign_with_seeds([2; 32], [12; 32])
         .expect("resigned report");
     assert!(ReplicationPacket::from_reports(vec![first, second]).is_err());
+}
+
+fn run_verifier(bytes: &[u8]) -> Output {
+    let directory = tempdir().expect("temporary packet directory");
+    let packet_path = directory.path().join("packet.json");
+    fs::write(&packet_path, bytes).expect("packet bytes");
+    Command::new(env!("CARGO_BIN_EXE_maintenance_replication_verifier"))
+        .arg(packet_path)
+        .output()
+        .expect("verifier process")
+}
+
+#[test]
+fn verifier_binary_accepts_only_a_valid_local_packet() {
+    let packet = ReplicationPacket::from_reports(vec![
+        report(1, "host-a", "operator-a"),
+        report(2, "host-b", "operator-b"),
+    ])
+    .expect("packet");
+    let output = run_verifier(&packet.canonical_bytes().expect("canonical packet"));
+    assert!(output.status.success());
+    let response: serde_json::Value = serde_json::from_slice(&output.stdout).expect("response");
+    assert_eq!(response["status"], "valid_local_packet");
+    assert_eq!(response["packet_id"], packet.packet_id);
+    assert!(response.get("error").is_none());
+}
+
+#[test]
+fn verifier_binary_rejects_packet_tampering_without_execution() {
+    let packet = ReplicationPacket::from_reports(vec![
+        report(1, "host-a", "operator-a"),
+        report(2, "host-b", "operator-b"),
+    ])
+    .expect("packet");
+    let canonical =
+        String::from_utf8(packet.canonical_bytes().expect("canonical packet")).expect("json");
+    let tampered = canonical.replace(
+        "normalize-trailing-ascii-spaces-v1",
+        "other-maintenance-operation",
+    );
+    let output = run_verifier(tampered.as_bytes());
+    assert!(!output.status.success());
+    let response: serde_json::Value = serde_json::from_slice(&output.stdout).expect("response");
+    assert_eq!(response["status"], "invalid_local_packet");
+    assert!(response["error"].as_str().is_some());
 }

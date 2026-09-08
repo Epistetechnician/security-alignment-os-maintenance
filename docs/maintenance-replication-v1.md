@@ -57,11 +57,12 @@ against the same frozen request and requirements. Each operator records the
 scenario result and evidence digest, signs its own report with a distinct key,
 and exchanges only the packet required by the local acceptance procedure.
 
-The current repository provides the Rust packet validator and deterministic
-contract tests. It does not provide host attestation, authenticated operator
-identity, network transfer, evidence custody, or a second-host execution
-result. The local two-report fixture is a wire-contract test, not separate-host
-replication evidence.
+The current repository provides the Rust packet validator,
+`maintenance_replication_verifier`, and deterministic contract tests. It does
+not provide host attestation, authenticated operator identity, network
+transfer, evidence custody, or a second-host execution result. The local
+two-report fixture is a wire-contract test, not separate-host replication
+evidence.
 
 ## Validation
 

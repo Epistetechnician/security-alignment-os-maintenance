@@ -76,7 +76,8 @@ ownership, in addition to the existing exact completion, replay, proposal,
 cancellation, path/link, crash, and configuration-substitution cases.
 
 The separate-host replication contract is implemented in
-`maintenance_replication.rs`. Its eight contract tests bind two signed reports
+`maintenance_replication.rs`, with a digest-only
+`maintenance_replication_verifier` entrypoint. Its ten contract tests bind two signed reports
 to the same fixed request, process revision, full-checkout baseline, and exact
 containment/recovery matrix. They are local wire-contract tests; they do not
 count as separate-host execution or authenticated operator evidence.

@@ -59,6 +59,7 @@ JavaScript runtime dependencies are installed.
 | `broker`, `capability_broker`, `capability_supervisor` | Separate Unix IPC broker, broker-only receipt issuer, staged uppercase file transformation, canonical journal, timeout/kill path, network-denied host sandbox, and frozen crash recovery |
 | `broker_adversarial_runner` | Separate hostile client for direct supervisor, path escape, replay, forged receipt, malformed child operation, and telemetry containment attempts |
 | `maintenance_replication` | Canonical, signed two-report packet for the fixed maintenance containment/recovery matrix; no host attestation or second-host execution |
+| `maintenance_replication_verifier` | Digest-only validator for an exchanged replication packet; it performs no maintenance or network execution |
 | `schema` | Versioned schema identities with exact digest-bound lookup and canonical recovery |
 | `Runtime`, `AuditJournal` | Reversible dictionary actions, terminal freeze/kill, and digest-chained audit persistence |
 | `specialist`, `memory` | Immutable specialist identities, consented retrieval, revocation, redacted telemetry, frozen tool manifests, and canonical durable memory/registry snapshots with crash recovery |

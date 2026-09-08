@@ -18,7 +18,7 @@ use std::path::{Component, Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-pub const PROCESS_VERSION: u8 = 1;
+pub const PROCESS_VERSION: u8 = 2;
 pub const MAX_ID_BYTES: usize = 128;
 pub const MAX_PATCH_BYTES: usize = 1_048_576;
 pub const MAX_EVALUATOR_OUTPUT_BYTES: usize = 32_768;
@@ -198,13 +198,29 @@ struct Intent {
     before_bytes: Vec<u8>,
     before_digest: String,
     after_digest: String,
+    checkout_baseline_digest: String,
     backup_name: String,
 }
 
 struct ProcessLock {
     path: PathBuf,
+    token: Vec<u8>,
 }
 impl Drop for ProcessLock {
+    fn drop(&mut self) {
+        if fs::read(&self.path)
+            .map(|contents| contents == self.token)
+            .unwrap_or(false)
+        {
+            let _ = fs::remove_file(&self.path);
+        }
+    }
+}
+
+struct FileCleanup {
+    path: PathBuf,
+}
+impl Drop for FileCleanup {
     fn drop(&mut self) {
         let _ = fs::remove_file(&self.path);
     }
@@ -329,18 +345,53 @@ fn save_state(dir: &Path, state: &DurableState) -> Result<()> {
     )
 }
 
-fn lock_state(dir: &Path) -> Result<ProcessLock> {
-    let path = dir.join("maintenance-state.lock");
-    let mut file = OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&path)
-        .map_err(|_| {
-            Error::Rejected("maintenance state is busy or requires explicit recovery".into())
-        })?;
-    file.write_all(std::process::id().to_string().as_bytes())?;
+/// Return the private sibling lock path shared by every broker configuration
+/// that names the same canonical checkout.
+pub fn checkout_lock_path(root: &Path) -> PathBuf {
+    let identity = digest_bytes(root.to_string_lossy().as_bytes());
+    root.parent()
+        .unwrap_or_else(|| Path::new("/"))
+        .join(format!(".maintenance-checkout-{identity}.lock"))
+}
+
+fn lock_checkout(root: &Path) -> Result<ProcessLock> {
+    let path = checkout_lock_path(root);
+    let token = format!(
+        "{}-{}",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or_default()
+    )
+    .into_bytes();
+    let mut options = OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = options.open(&path).map_err(|_| {
+        Error::Rejected("maintenance checkout is busy or requires explicit recovery".into())
+    })?;
+    file.write_all(&token)?;
     file.sync_all()?;
-    Ok(ProcessLock { path })
+    Ok(ProcessLock { path, token })
+}
+
+fn test_failpoint(name: &str) -> bool {
+    std::env::var("MAINTENANCE_TEST_FAILPOINT").ok().as_deref() == Some(name)
+}
+
+fn test_pause(name: &str, default_ms: u64) {
+    if test_failpoint(name) {
+        let milliseconds = std::env::var("MAINTENANCE_TEST_PAUSE_MS")
+            .ok()
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(default_ms);
+        std::thread::sleep(Duration::from_millis(milliseconds));
+    }
 }
 
 fn target_path(root: &Path, relative: &str) -> Result<PathBuf> {
@@ -499,6 +550,10 @@ fn validate_config(config: &Config) -> Result<()> {
     ensure_private_dir(&config.state_dir)?;
     let checkout = fs::canonicalize(&config.checkout_root)?;
     let state = fs::canonicalize(&config.state_dir)?;
+    let checkout_parent = checkout
+        .parent()
+        .ok_or_else(|| Error::Rejected("checkout has no private lock directory".into()))?;
+    private_owned(checkout_parent, true)?;
     if checkout != config.checkout_root
         || state != config.state_dir
         || state.starts_with(&checkout)
@@ -627,12 +682,22 @@ fn recover(config: &Config, state: &mut DurableState) -> Result<bool> {
     }
     private_owned(&backup, false)?;
     let baseline = fs::read(&backup)?;
-    if baseline != intent.before_bytes || digest_bytes(&baseline) != intent.before_digest {
+    if baseline != intent.before_bytes
+        || digest_bytes(&baseline) != intent.before_digest
+        || !valid_digest(&intent.checkout_baseline_digest)
+    {
         state.frozen = true;
         save_state(&config.state_dir, state)?;
         return Ok(true);
     }
-    let current = read_regular_target(&target)?;
+    let current = match read_regular_target(&target) {
+        Ok(bytes) => bytes,
+        Err(_) => {
+            state.frozen = true;
+            save_state(&config.state_dir, state)?;
+            return Ok(true);
+        }
+    };
     if current != baseline && digest_bytes(&current) != intent.after_digest {
         state.frozen = true;
         save_state(&config.state_dir, state)?;
@@ -641,7 +706,9 @@ fn recover(config: &Config, state: &mut DurableState) -> Result<bool> {
     if current != baseline {
         restore_atomic(&target, &baseline, &intent.request_digest)?;
     }
-    if read_regular_target(&target)? != baseline {
+    if read_regular_target(&target).ok().as_deref() != Some(baseline.as_slice())
+        || checkout_baseline_digest(&config.checkout_root)? != intent.checkout_baseline_digest
+    {
         state.frozen = true;
         save_state(&config.state_dir, state)?;
         return Ok(true);
@@ -682,7 +749,7 @@ fn invoke_evaluator(
         .state_dir
         .join(format!("maintenance-{request_digest}.job"));
     atomic_write(&job_path, &canonical_bytes(&job)?)?;
-    let _job_cleanup = ProcessLock {
+    let _job_cleanup = FileCleanup {
         path: job_path.clone(),
     };
     let job_file = File::open(&job_path)?;
@@ -706,6 +773,7 @@ fn invoke_evaluator(
                 "evaluator cancelled or lease expired".into(),
             ));
         }
+        test_pause("pause-during-evaluation", 1_200);
         if let Some(status) = child.try_wait()? {
             break status;
         }
@@ -728,6 +796,36 @@ fn invoke_evaluator(
     Ok(serde_json::from_slice(&output)?)
 }
 
+struct RollbackContext<'a> {
+    config: &'a Config,
+    state: &'a mut DurableState,
+    target: &'a Path,
+    baseline: &'a [u8],
+    backup: &'a Path,
+    request: &'a Request,
+}
+
+fn rollback_on_error(
+    context: RollbackContext<'_>,
+    operation: &str,
+    error: Error,
+) -> Result<Outcome> {
+    match rollback(
+        context.config,
+        context.state,
+        context.target,
+        context.baseline,
+        context.backup,
+        context.request,
+        operation,
+    ) {
+        Ok(outcome) => Ok(outcome),
+        Err(rollback_error) => Err(Error::Rejected(format!(
+            "{operation}: {error}; rollback failed: {rollback_error}"
+        ))),
+    }
+}
+
 /// Execute one fixed maintenance request and return a bounded, typed outcome.
 pub fn run(config: &Config, request: &Request) -> Result<Outcome> {
     let now = now_secs()?;
@@ -740,7 +838,8 @@ pub fn run(config: &Config, request: &Request) -> Result<Outcome> {
             false,
         ));
     }
-    let _lock = lock_state(&config.state_dir)?;
+    let _lock = lock_checkout(&config.checkout_root)?;
+    test_pause("hold-checkout-lock", 250);
     let mut state = load_state(&config.state_dir, &digest(config)?)?;
     let recovery = recover(config, &mut state);
     if recovery.is_err() {
@@ -864,10 +963,11 @@ pub fn run(config: &Config, request: &Request) -> Result<Outcome> {
         before_bytes: current.clone(),
         before_digest: request.before_digest.clone(),
         after_digest: request.after_digest.clone(),
+        checkout_baseline_digest: request.checkout_baseline_digest.clone(),
         backup_name: backup_name.clone(),
     });
     save_state(&config.state_dir, &state)?;
-    if std::env::var("MAINTENANCE_TEST_FAILPOINT").ok().as_deref() == Some("after-durable-intent") {
+    if test_failpoint("after-durable-intent") {
         std::process::exit(86);
     }
     if cancelled(&config.cancellation_file) || expired(request) {
@@ -884,20 +984,87 @@ pub fn run(config: &Config, request: &Request) -> Result<Outcome> {
     let tmp = config
         .checkout_root
         .join(format!(".maintenance-{request_digest}.tmp"));
-    atomic_write(&tmp, &request.after_bytes)?;
-    fs::rename(&tmp, &target)?;
-    sync_dir(&config.checkout_root)?;
-    if std::env::var("MAINTENANCE_TEST_FAILPOINT").ok().as_deref() == Some("after-replacement") {
+    if let Err(error) = atomic_write(&tmp, &request.after_bytes) {
+        return rollback_on_error(
+            RollbackContext {
+                config,
+                state: &mut state,
+                target: &target,
+                baseline: &current,
+                backup: &backup,
+                request,
+            },
+            "candidate write failed",
+            error,
+        );
+    }
+    if let Err(error) = fs::rename(&tmp, &target) {
+        return rollback_on_error(
+            RollbackContext {
+                config,
+                state: &mut state,
+                target: &target,
+                baseline: &current,
+                backup: &backup,
+                request,
+            },
+            "candidate replacement failed",
+            error.into(),
+        );
+    }
+    if let Err(error) = sync_dir(&config.checkout_root) {
+        return rollback_on_error(
+            RollbackContext {
+                config,
+                state: &mut state,
+                target: &target,
+                baseline: &current,
+                backup: &backup,
+                request,
+            },
+            "candidate directory sync failed",
+            error,
+        );
+    }
+    if test_failpoint("after-replacement") {
         std::process::exit(87);
     }
-    if std::env::var("MAINTENANCE_TEST_FAILPOINT").ok().as_deref()
-        == Some("cancel-after-replacement")
-    {
-        atomic_write(&config.cancellation_file, b"test cancellation")?;
+    if test_failpoint("cancel-after-replacement") {
+        if let Err(error) = atomic_write(&config.cancellation_file, b"test cancellation") {
+            return rollback_on_error(
+                RollbackContext {
+                    config,
+                    state: &mut state,
+                    target: &target,
+                    baseline: &current,
+                    backup: &backup,
+                    request,
+                },
+                "test cancellation setup failed",
+                error,
+            );
+        }
     }
+    let observed_after = match read_regular_target(&target) {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            return rollback_on_error(
+                RollbackContext {
+                    config,
+                    state: &mut state,
+                    target: &target,
+                    baseline: &current,
+                    backup: &backup,
+                    request,
+                },
+                "post-replacement target read failed",
+                error,
+            )
+        }
+    };
     if cancelled(&config.cancellation_file)
         || expired(request)
-        || read_regular_target(&target)? != request.after_bytes
+        || observed_after != request.after_bytes
     {
         return rollback(
             config,
@@ -909,8 +1076,56 @@ pub fn run(config: &Config, request: &Request) -> Result<Outcome> {
             "post-replacement check failed",
         );
     }
+    test_pause("pause-before-finalization", 250);
+    let final_after = match read_regular_target(&target) {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            return rollback_on_error(
+                RollbackContext {
+                    config,
+                    state: &mut state,
+                    target: &target,
+                    baseline: &current,
+                    backup: &backup,
+                    request,
+                },
+                "final target read failed",
+                error,
+            )
+        }
+    };
+    if cancelled(&config.cancellation_file)
+        || expired(request)
+        || test_failpoint("expire-before-finalization")
+        || final_after != request.after_bytes
+    {
+        return rollback(
+            config,
+            &mut state,
+            &target,
+            &current,
+            &backup,
+            request,
+            "authorization lost before completion",
+        );
+    }
+    let mut completed_state = state.clone();
+    completed_state.in_flight = None;
+    if let Err(error) = save_state(&config.state_dir, &completed_state) {
+        return rollback_on_error(
+            RollbackContext {
+                config,
+                state: &mut state,
+                target: &target,
+                baseline: &current,
+                backup: &backup,
+                request,
+            },
+            "completion state persistence failed",
+            error,
+        );
+    }
     state.in_flight = None;
-    save_state(&config.state_dir, &state)?;
     let _ = fs::remove_file(backup);
     Ok(Outcome {
         state_slice: STATE_SLICE.into(),
@@ -933,9 +1148,39 @@ fn rollback(
     request: &Request,
     reason: &str,
 ) -> Result<Outcome> {
-    let restored = restore_atomic(target, baseline, &digest(request)?).is_ok()
-        && read_regular_target(target).is_ok_and(|bytes| bytes == baseline);
-    if restored {
+    let current = match read_regular_target(target) {
+        Ok(bytes) => bytes,
+        Err(_) => {
+            state.frozen = true;
+            save_state(&config.state_dir, state)?;
+            return Ok(base(
+                request,
+                OutcomeStatus::Frozen,
+                Some("rollback target is unavailable; durable state frozen".into()),
+                false,
+            ));
+        }
+    };
+    if current != baseline && digest_bytes(&current) != request.after_digest {
+        state.frozen = true;
+        save_state(&config.state_dir, state)?;
+        return Ok(base(
+            request,
+            OutcomeStatus::Frozen,
+            Some("rollback detected a concurrent target change; durable state frozen".into()),
+            false,
+        ));
+    }
+    let restored = if current == baseline {
+        true
+    } else {
+        restore_atomic(target, baseline, &digest(request)?).is_ok()
+            && read_regular_target(target).is_ok_and(|bytes| bytes == baseline)
+    };
+    let restored_baseline = restored
+        && checkout_baseline_digest(config.checkout_root.as_path())
+            .is_ok_and(|digest| digest == request.checkout_baseline_digest);
+    if restored_baseline {
         state.in_flight = None;
         save_state(&config.state_dir, state)?;
         let _ = fs::remove_file(backup);
@@ -951,7 +1196,9 @@ fn rollback(
         Ok(base(
             request,
             OutcomeStatus::Frozen,
-            Some("rollback failed; durable state frozen".into()),
+            Some(
+                "rollback did not restore the full checkout baseline; durable state frozen".into(),
+            ),
             false,
         ))
     }

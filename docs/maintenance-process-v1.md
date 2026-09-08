@@ -20,8 +20,9 @@ Implementation and review cover these transitions:
    signed, request-bound evaluation receipt.
 3. Verify the signature, executable identity, frozen requirements, and current
    lease before recording durable intent and consuming replay authority.
-4. Replace the authorized file, verify the exact result, and persist completion.
-   Cancellation or expiry before completion requires restoration.
+4. Replace the authorized file, verify the exact result, recheck authorization
+   immediately before the durable completion transition, and persist
+   completion. Cancellation or expiry before completion requires restoration.
 5. Recover interrupted intent by restoring the baseline and freezing subsequent
    work. Failed or ambiguous restoration stays frozen.
 
@@ -55,22 +56,35 @@ and recovery after interruption. Passing results apply to the tested local host
 and fixed operation only. The original broker's sandbox tests do not confer
 sandbox guarantees on this separate maintenance entrypoint.
 
-Local validation passed with `pnpm run lint`: 103 library tests, three existing
-broker process tests, eight maintenance process tests, formatting, and Clippy.
-The maintenance tests cover exact completion, restart replay, invalid/stale
-proposals, pre-execution expiry/cancellation, evaluator digest/key/test-policy
-substitution, path/link rejection, occupied locks, post-write cancellation,
-two crash points, and recovery configuration substitution.
+The independent adversarial review was frozen to commit
+`cd2fb760dc6a0959e549986fcfbe1541bb1275ee` and completed with one Luna high
+reviewer. It confirmed four defects: finalization lacked a last
+lease/cancellation gate; the lock was scoped to `state_dir`; post-intent I/O
+errors could escape without rollback; and recovery checked only the target,
+not the checkout-wide baseline. The repaired operation uses one private sibling
+lock per canonical checkout, binds the checkout digest into durable intent,
+rolls back post-intent errors, and rechecks authorization before durable
+completion. The durable state format is now process version 2.
 
-Luna provided initial design review and implementation assistance. Its final
-code review did not complete because the shared usage limit was reached.
-Coordinator review and local tests are not independent acceptance. Concurrent
-live-writer stress, mid-evaluation expiry, arbitrary syscall containment,
-separate-host replication, and deployment acceptance remain unestablished.
-Recovery verifies file bytes; this version replaces the file with private
-permissions and does not promise preservation of timestamps or extended
-attributes. Infrastructure failures after durable intent leave recovery work
-pending and must never be interpreted as successful completion.
+Reproducible local validation passed with `pnpm run lint`: 103 library tests,
+three broker process tests, 16 maintenance process tests, formatting, and
+warnings-denied Clippy. The added maintenance tests cover lease expiry during
+evaluation and finalization, finalization cancellation, completion-state
+persistence failure, target and neighbor mutation during recovery, distinct
+state directories sharing a checkout writer fence, and replacement-lock
+ownership, in addition to the existing exact completion, replay, proposal,
+cancellation, path/link, crash, and configuration-substitution cases.
+
+The results establish containment and recovery for the tested local host and
+fixed operation only. They do not establish arbitrary syscall containment,
+same-UID hostile-process isolation, separate-host replication, deployment
+acceptance, provider execution, or scientific alignment evidence. Recovery
+verifies the complete checkout digest and freezes with `rolled_back: false` on
+an ambiguous or concurrent modification. This version replaces the file with
+private permissions and does not promise preservation of timestamps or
+extended attributes. Infrastructure failures that also prevent durable
+rollback state persistence remain operator-recovery work and are never
+interpreted as successful completion.
 
 ## Local invocation and recovery
 
@@ -89,12 +103,16 @@ every error as closed authority. Creating the configured cancellation file
 closes execution at the next check. Cancellation is operator-controlled and
 sticky until that operator removes the marker.
 
-An existing `maintenance-state.lock` blocks execution. After a crash, first
-confirm externally that the previous broker and evaluator have terminated.
-Only then may the operator remove that stale lock and invoke recovery with the
-same configuration. Recovery does not resume the patch; it restores an
-unambiguous recorded baseline and freezes. Never delete the durable state to
-clear replay or freeze controls. A fresh operational release needs review.
+An existing `.maintenance-checkout-<sha256-of-canonical-path>.lock` blocks
+every broker configuration for that checkout, including configurations with
+different state directories. After a crash, first confirm externally that the
+previous broker and evaluator have terminated. Only then may the operator
+remove that stale lock and invoke recovery with the same configuration.
+Recovery does not resume the patch; it restores an unambiguous recorded
+baseline and freezes. If the checkout-wide baseline is no longer consistent,
+recovery preserves the observed change and freezes without reporting a
+successful rollback. Never delete the durable state to clear replay or freeze
+controls. A fresh operational release needs review.
 
 `MAINTENANCE_TEST_FAILPOINT` is an operator-only crash-injection control used by
 the process tests. It must be absent from operational launches. No failpoint

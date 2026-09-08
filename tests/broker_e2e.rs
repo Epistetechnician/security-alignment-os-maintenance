@@ -7,6 +7,7 @@ use security_alignment_os::broker::{
     FileTransformOperation, FileTransformRequest, TransactionStatus,
 };
 use security_alignment_os::canonical_bytes;
+use security_alignment_os::receipts::ReceiptSigner;
 use security_alignment_os::{digest_bytes, Evidence, EvidenceRegistry};
 use std::fs;
 use std::path::Path;
@@ -31,7 +32,7 @@ fn crash_recovery_freezes_in_flight_transaction_without_recreating_authority() {
     let supervisor = Path::new(env!("CARGO_BIN_EXE_capability_supervisor"));
     let authorized = request(supervisor, input, 11, true);
     let registry = registry_for(std::slice::from_ref(&authorized));
-    let (mut crashed, client) = start_broker(&directory, &registry, supervisor, true);
+    let (mut crashed, client) = start_broker(&directory, &registry, supervisor, true, false);
     let result = client.request(BrokerRequest::Execute(Box::new(authorized.clone())));
     assert!(result.is_err(), "injected crash must sever IPC");
     let _ = crashed.wait();
@@ -49,7 +50,8 @@ fn crash_recovery_freezes_in_flight_transaction_without_recreating_authority() {
     assert_eq!(fs::read(&source).expect("source read"), input);
     assert!(!directory.path().join("output-11.txt").exists());
 
-    let (mut recovered, recovery_client) = start_broker(&directory, &registry, supervisor, false);
+    let (mut recovered, recovery_client) =
+        start_broker(&directory, &registry, supervisor, false, false);
     let recovered_journal = BrokerJournal::load(&journal_path).expect("recovered journal");
     assert_eq!(
         recovered_journal.status(&request_digest),
@@ -61,6 +63,52 @@ fn crash_recovery_freezes_in_flight_transaction_without_recreating_authority() {
     }
     assert_eq!(fs::read(&source).expect("source read"), input);
     assert!(!directory.path().join("output-11.txt").exists());
+    let _ = recovered.kill();
+    let _ = recovered.wait();
+}
+
+#[test]
+fn post_rename_crash_recovery_removes_uncommitted_destination() {
+    let directory = tempfile::tempdir().expect("tempdir");
+    let source = directory.path().join("source.txt");
+    let input = b"Post-rename crash\n";
+    fs::write(&source, input).expect("source");
+    let supervisor = Path::new(env!("CARGO_BIN_EXE_capability_supervisor"));
+    let authorized = request(supervisor, input, 12, true);
+    let registry = registry_for(std::slice::from_ref(&authorized));
+    let (mut crashed, client) = start_broker(&directory, &registry, supervisor, false, true);
+    let result = client.request(BrokerRequest::Execute(Box::new(authorized.clone())));
+    assert!(result.is_err(), "injected post-rename crash must sever IPC");
+    let _ = crashed.wait();
+    let destination = directory.path().join("output-12.txt");
+    assert!(
+        destination.exists(),
+        "fault must occur after supervisor rename"
+    );
+    let journal_path = directory.path().join("journal.json");
+    let request_digest = authorized
+        .to_proposal()
+        .expect("proposal")
+        .digest()
+        .expect("digest");
+    assert_eq!(
+        BrokerJournal::load(&journal_path)
+            .expect("journal")
+            .status(&request_digest),
+        Some(TransactionStatus::Executing)
+    );
+
+    let (mut recovered, recovery_client) =
+        start_broker(&directory, &registry, supervisor, false, false);
+    assert!(
+        !destination.exists(),
+        "recovery must remove uncommitted output"
+    );
+    match recovery_client.request(BrokerRequest::Execute(Box::new(authorized))) {
+        Ok(BrokerResponse::Frozen { code }) => assert_eq!(code, "broker_frozen"),
+        other => panic!("unexpected recovery response: {other:?}"),
+    }
+    assert_eq!(fs::read(&source).expect("source"), input);
     let _ = recovered.kill();
     let _ = recovered.wait();
 }
@@ -116,10 +164,19 @@ fn start_broker(
     registry: &EvidenceRegistry,
     supervisor: &Path,
     kill_after_executing: bool,
+    kill_after_rename: bool,
 ) -> (Child, BrokerClient) {
     let socket = directory.path().join("broker.sock");
     let journal = directory.path().join("journal.json");
     let evidence = directory.path().join("evidence.json");
+    let seed_path = directory.path().join("broker.seed");
+    fs::write(&seed_path, [7u8; 32]).expect("seed");
+    #[cfg(unix)]
+    fs::set_permissions(
+        &seed_path,
+        std::os::unix::fs::PermissionsExt::from_mode(0o600),
+    )
+    .expect("seed permissions");
     registry.save(&evidence).expect("evidence save");
     let mut command = Command::new(env!("CARGO_BIN_EXE_capability_broker"));
     command.args([
@@ -128,9 +185,13 @@ fn start_broker(
         journal.as_os_str(),
         evidence.as_os_str(),
         supervisor.as_os_str(),
+        seed_path.as_os_str(),
     ]);
     if kill_after_executing {
         command.env("BROKER_KILL_AFTER_EXECUTING", "1");
+    }
+    if kill_after_rename {
+        command.env("BROKER_KILL_AFTER_RENAME", "1");
     }
     let child = command.spawn().expect("broker spawn");
     let client = BrokerClient::new(socket);
@@ -173,14 +234,29 @@ fn broker_process_commits_authorized_transform_and_rejects_replay() {
         escaped.clone(),
         missing_telemetry.clone(),
     ]);
-    let (mut child, client) = start_broker(&directory, &registry, supervisor, false);
+    let (mut child, client) = start_broker(&directory, &registry, supervisor, false, false);
     let response = client
         .request(BrokerRequest::Execute(Box::new(authorized.clone())))
         .expect("execute");
-    let (receipt, hello) = match response {
-        BrokerResponse::Completed { receipt, .. } => (receipt, client.hello().expect("hello")),
-        other => panic!("unexpected response: {other:?}"),
-    };
+    let (receipt, execution_receipt, decision_digest, decision, policy, hello) =
+        match response.clone() {
+            BrokerResponse::Completed {
+                receipt,
+                execution_receipt,
+                decision_digest,
+                decision,
+                policy,
+                ..
+            } => (
+                receipt,
+                execution_receipt,
+                decision_digest,
+                decision,
+                policy,
+                client.hello().expect("hello"),
+            ),
+            other => panic!("unexpected response: {other:?}"),
+        };
     assert_eq!(fs::read(&source).expect("source read"), input);
     assert_eq!(
         fs::read(directory.path().join("output-1.txt")).expect("output"),
@@ -188,13 +264,128 @@ fn broker_process_commits_authorized_transform_and_rejects_replay() {
     );
     let mut forged = receipt.clone();
     forged.signature[0] ^= 1;
-    let verifier = security_alignment_os::receipts::ReceiptVerifier::with_key(
-        hello.issuer_key_id,
-        hello.issuer_public_key.try_into().expect("key"),
-    )
-    .expect("verifier");
+    let public_key: [u8; 32] = hello.issuer_public_key.clone().try_into().expect("key");
+    let mut verifier =
+        security_alignment_os::receipts::ReceiptVerifier::with_key(hello.issuer_key_id, public_key)
+            .expect("verifier");
     assert!(verifier.verify_signature(&receipt).is_ok());
     assert!(verifier.verify_signature(&forged).is_err());
+    verifier
+        .verify_execution(
+            &execution_receipt,
+            &receipt,
+            "evidence-1",
+            &registry
+                .record_digest("evidence-1")
+                .expect("evidence digest"),
+            &authorized.input_digest,
+            security_alignment_os::broker::TRANSFORMER_ID,
+            &decision_digest,
+            timestamp(),
+        )
+        .expect("execution receipt");
+    security_alignment_os::checker::validate_capability_receipt(
+        &receipt,
+        "tenant-test",
+        &authorized.to_proposal().expect("proposal"),
+        &decision,
+        &policy,
+        public_key,
+        timestamp(),
+    )
+    .expect("independent capability receipt");
+    security_alignment_os::checker::validate_execution_receipt(
+        &execution_receipt,
+        &receipt,
+        "evidence-1",
+        &registry
+            .record_digest("evidence-1")
+            .expect("evidence digest"),
+        &authorized.input_digest,
+        security_alignment_os::broker::TRANSFORMER_ID,
+        &decision_digest,
+        timestamp(),
+        public_key,
+    )
+    .expect("independent execution receipt");
+    let expected_signer =
+        ReceiptSigner::from_seed("broker-ephemeral-v1", [7; 32]).expect("seed signer");
+    let trust = security_alignment_os::integration::BrokerTrustAnchor {
+        issuer_key_id: expected_signer.key_id().into(),
+        issuer_public_key: expected_signer.verifying_key_bytes(),
+    };
+    let accepted = security_alignment_os::integration::accept_broker_completion(
+        &authorized,
+        &response,
+        &registry,
+        &trust,
+        directory.path(),
+        timestamp(),
+    )
+    .expect("broker completion acceptance");
+    assert_eq!(accepted.request_digest, decision.candidate_digest);
+    assert_eq!(accepted.output_digest, digest_bytes(b"HELLO BROKER\n"));
+    let forged_output = match response.clone() {
+        BrokerResponse::Completed {
+            request_digest,
+            decision_digest,
+            decision,
+            policy,
+            receipt,
+            execution_receipt,
+            ..
+        } => BrokerResponse::Completed {
+            request_digest,
+            decision_digest,
+            decision,
+            policy,
+            receipt,
+            execution_receipt,
+            output_digest: "0".repeat(64),
+        },
+        other => panic!("unexpected response: {other:?}"),
+    };
+    assert!(
+        security_alignment_os::integration::accept_broker_completion(
+            &authorized,
+            &forged_output,
+            &registry,
+            &trust,
+            directory.path(),
+            timestamp(),
+        )
+        .is_err()
+    );
+    let wrong_trust = security_alignment_os::integration::BrokerTrustAnchor {
+        issuer_key_id: "wrong-broker-key".into(),
+        issuer_public_key: [3; 32],
+    };
+    assert!(
+        security_alignment_os::integration::accept_broker_completion(
+            &authorized,
+            &response,
+            &registry,
+            &wrong_trust,
+            directory.path(),
+            timestamp(),
+        )
+        .is_err()
+    );
+    let mut revoked_registry = registry.clone();
+    revoked_registry
+        .revoke("evidence-1")
+        .expect("revoke evidence");
+    assert!(
+        security_alignment_os::integration::accept_broker_completion(
+            &authorized,
+            &response,
+            &revoked_registry,
+            &trust,
+            directory.path(),
+            timestamp(),
+        )
+        .is_err()
+    );
     match client.request(BrokerRequest::Execute(Box::new(authorized))) {
         Ok(BrokerResponse::Rejected { code, .. }) => assert_eq!(code, "replay"),
         other => panic!("unexpected replay response: {other:?}"),
@@ -227,7 +418,7 @@ fn adversarial_runner_contains_direct_and_malformed_attempts() {
     let supervisor = Path::new(env!("CARGO_BIN_EXE_capability_supervisor"));
     let authorized = request(supervisor, input, 21, true);
     let registry = registry_for(std::slice::from_ref(&authorized));
-    let (mut broker, client) = start_broker(&directory, &registry, supervisor, false);
+    let (mut broker, client) = start_broker(&directory, &registry, supervisor, false, false);
     let request_path = directory.path().join("request.json");
     fs::write(
         &request_path,

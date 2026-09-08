@@ -32,6 +32,15 @@ identity, decision bindings, validity window, and Ed25519 signature without
 calling `ReceiptVerifier`. It accepts a caller-provided public key and does not
 replace independent trust in the persisted verifier snapshot.
 
+The broker vertical slice adds `ExecutionReceipt`. The broker issues it only
+after its supervisor validates and commits output. It binds the earlier
+capability receipt ID, proposal and decision digests, evidence ID and evidence
+record digest, input and output digests, operation identity, subject, agent,
+action, scope, issuer, and expiry. `ReceiptVerifier::verify_execution` and
+`checker::validate_execution_receipt` independently verify the linkage and
+signature. This is a signed broker execution claim, not a zero-knowledge proof
+or independent proof that the input was truthful.
+
 The module is pure Rust and has no provider, network, model, host-attestation,
 OS sandbox, authenticated storage, or distributed replay protection. A valid
 signature proves possession of the registered local signing key over the

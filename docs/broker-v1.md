@@ -21,6 +21,14 @@ also requires a broker-generated one-time launch token in its cleared
 environment; direct invocation of the supervisor therefore fails before it
 can stage output.
 
+On successful completion the broker returns both the pre-execution
+`CapabilityReceipt` and a post-validation `ExecutionReceipt`. The latter is
+signed by the same broker-only key and binds the capability receipt ID,
+decision digest, evidence ID, input digest, operation ID, output digest, and
+expiry. A client can verify this result with `ReceiptVerifier::verify_execution`
+or the independent `checker::validate_execution_receipt` without recreating
+the broker's private key or trusting an unsigned output message.
+
 The broker journal is canonical, hash chained, and atomically replaced. It
 records `Admitted` before `Executing`, then `Committed`, `RolledBack`, or
 `Quarantined`. A restart converts any latest admitted or executing transaction
@@ -46,6 +54,12 @@ checks successful transformation, unchanged source bytes, receipt forgery
 rejection, replay rejection, freeze behavior, and crash recovery from an
 `Executing` journal record.
 
+For a stable local test identity, the broker accepts an optional owner-only
+seed path as its sixth argument. The file must contain exactly 32 bytes and
+have no group or other permission bits; the broker never prints or returns the
+seed. Production deployment still requires an externally managed key and
+authenticated process identity.
+
 This is local enforcement evidence for one operation on the supported host.
 It does not establish authenticated host identity, protection from a hostile
 same-UID process that can inspect the workspace, provider execution, model
@@ -57,6 +71,6 @@ must be revalidated on each supported OS release.
 ## Commands
 
 ```sh
-cargo run --bin capability_broker -- <socket> <workspace> <journal> <evidence.json> <capability_supervisor>
+cargo run --bin capability_broker -- <socket> <workspace> <journal> <evidence.json> <capability_supervisor> [broker_seed]
 cargo run --bin broker_adversarial_runner -- <socket> <request.json> <workspace> <capability_supervisor>
 ```

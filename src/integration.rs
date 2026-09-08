@@ -6,12 +6,14 @@
 //! are caller-supplied assertions; this module does not inspect a process,
 //! model, provider, network, or host security boundary.
 
+use crate::broker::{self, BrokerResponse, FileTransformOperation, TRANSFORMER_ID};
 use crate::receipts::{CapabilityReceipt, ReceiptVerifier};
 use crate::{
-    artifacts::ArtifactRegistry, contract, digest, DecisionKind, EvidenceRegistry, Kernel,
-    Proposal, Result, Runtime,
+    artifacts::ArtifactRegistry, checker, contract, digest, digest_bytes, DecisionKind,
+    EvidenceRegistry, Kernel, Proposal, Result, Runtime,
 };
 use serde::{Deserialize, Serialize};
+use std::path::Path;
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum Disposition {
@@ -35,6 +37,138 @@ pub struct WorkflowResult {
     pub subject_digest: String,
     pub decision_digest: Option<String>,
     pub observation_digest: String,
+}
+
+/// Public key and issuer identity pinned by the caller before accepting a
+/// broker completion. The broker hello message is transport metadata; it is
+/// not trusted as a key-distribution mechanism.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct BrokerTrustAnchor {
+    pub issuer_key_id: String,
+    pub issuer_public_key: [u8; 32],
+}
+
+/// Digest-only result returned after the broker response, evidence record,
+/// receipts, and committed bytes have all been independently checked. This
+/// adapter does not mutate a local kernel or runtime.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct BrokerCompletionResult {
+    pub request_digest: String,
+    pub decision_digest: String,
+    pub evidence_digest: String,
+    pub output_digest: String,
+    pub capability_receipt_id: String,
+    pub execution_receipt_id: String,
+}
+
+/// Accepts one completed external broker operation at the evidence boundary.
+/// Every acceptance check is read-only: authority was consumed and committed
+/// by the broker process, while this function independently validates the
+/// signed claims and the resulting workspace bytes before returning digests.
+pub fn accept_broker_completion(
+    request: &crate::broker::FileTransformRequest,
+    response: &BrokerResponse,
+    evidence: &EvidenceRegistry,
+    trust: &BrokerTrustAnchor,
+    workspace: &Path,
+    now: u64,
+) -> Result<BrokerCompletionResult> {
+    request.validate(now)?;
+    let proposal = request.to_proposal()?;
+    let request_digest = proposal.digest()?;
+    let BrokerResponse::Completed {
+        request_digest: response_request_digest,
+        decision_digest: response_decision_digest,
+        decision,
+        policy,
+        receipt,
+        execution_receipt,
+        output_digest: response_output_digest,
+    } = response
+    else {
+        return Err(crate::Error::Rejected(
+            "broker response is not a completed operation".into(),
+        ));
+    };
+    if response_request_digest != &request_digest
+        || response_decision_digest != &decision.decision_digest
+        || receipt.issuer_key_id != trust.issuer_key_id
+        || execution_receipt.issuer_key_id != trust.issuer_key_id
+    {
+        return Err(crate::Error::Rejected(
+            "broker completion identity or digest binding failed".into(),
+        ));
+    }
+    if !evidence.is_valid(&request.evidence_id, now, &request_digest) {
+        return Err(crate::Error::Quarantined(
+            "broker completion evidence is unavailable".into(),
+        ));
+    }
+    let evidence_digest = evidence.record_digest(&request.evidence_id)?;
+    checker::validate_capability_receipt(
+        receipt,
+        &request.subject,
+        &proposal,
+        decision,
+        policy,
+        trust.issuer_public_key,
+        now,
+    )?;
+    checker::validate_execution_receipt(
+        execution_receipt,
+        receipt,
+        &request.evidence_id,
+        &evidence_digest,
+        &request.input_digest,
+        TRANSFORMER_ID,
+        response_decision_digest,
+        now,
+        trust.issuer_public_key,
+    )?;
+    let source = broker::workspace_file(workspace, &request.source_relpath)?;
+    let destination = broker::workspace_file(workspace, &request.destination_relpath)?;
+    if !source.is_file() || !destination.is_file() {
+        return Err(crate::Error::Rejected(
+            "broker completion files are not regular files".into(),
+        ));
+    }
+    let source_bytes = std::fs::read(&source)?;
+    if source_bytes.len() as u64 > request.max_bytes
+        || digest_bytes(&source_bytes) != request.input_digest
+    {
+        return Err(crate::Error::Rejected(
+            "broker completion source binding failed".into(),
+        ));
+    }
+    let output = std::fs::read(&destination)?;
+    if output.len() as u64 > request.max_bytes {
+        return Err(crate::Error::Rejected(
+            "broker completion output exceeds quota".into(),
+        ));
+    }
+    let expected_output = match request.operation {
+        FileTransformOperation::UppercaseAscii => source_bytes
+            .iter()
+            .map(|byte| byte.to_ascii_uppercase())
+            .collect::<Vec<_>>(),
+    };
+    let output_digest = digest_bytes(&output);
+    if output != expected_output
+        || output_digest != *response_output_digest
+        || output_digest != execution_receipt.output_digest
+    {
+        return Err(crate::Error::Rejected(
+            "broker completion output binding failed".into(),
+        ));
+    }
+    Ok(BrokerCompletionResult {
+        request_digest,
+        decision_digest: response_decision_digest.clone(),
+        evidence_digest,
+        output_digest,
+        capability_receipt_id: receipt.receipt_id.clone(),
+        execution_receipt_id: execution_receipt.receipt_id.clone(),
+    })
 }
 
 pub struct EvidenceBinding<'a> {

@@ -8,7 +8,7 @@
 //! is a separately spawned executable and is always invoked through a
 //! fail-closed platform sandbox backend.
 
-use crate::receipts::{CapabilityReceipt, ReceiptSigner};
+use crate::receipts::{CapabilityReceipt, ExecutionReceipt, ReceiptSigner};
 use crate::{
     canonical_bytes, digest, digest_bytes, Action, Claim, DecisionKind, Error, EvidenceRegistry,
     Kernel, Policy, Proposal, Result, STATE_SLICE,
@@ -93,6 +93,19 @@ fn safe_join(root: &Path, relative: &str) -> Result<PathBuf> {
                 .ok_or_else(|| Error::Rejected("path has no filename".into()))?,
         ))
     }
+}
+
+/// Resolves one broker workspace-relative file path without permitting path
+/// traversal or symlink escape. Callers still need to validate the file type
+/// and content against their signed operation contract.
+pub fn workspace_file(workspace: &Path, relative: &str) -> Result<PathBuf> {
+    let root = fs::canonicalize(workspace)?;
+    if !root.is_dir() {
+        return Err(Error::Rejected(
+            "broker workspace is not a directory".into(),
+        ));
+    }
+    safe_join(&root, relative)
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -214,12 +227,16 @@ pub enum BrokerRequest {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[allow(clippy::large_enum_variant)]
 pub enum BrokerResponse {
     Hello(BrokerHello),
     Completed {
         request_digest: String,
         decision_digest: String,
+        decision: Box<crate::Decision>,
+        policy: Policy,
         receipt: CapabilityReceipt,
+        execution_receipt: Box<ExecutionReceipt>,
         output_digest: String,
     },
     Rejected {
@@ -253,6 +270,7 @@ pub struct TransactionEvent {
     pub request_digest: String,
     pub agent_id: String,
     pub nonce: u64,
+    pub destination_relpath: Option<String>,
     pub decision_digest: Option<String>,
     pub capability_token_id: Option<String>,
     pub status: TransactionStatus,
@@ -288,6 +306,10 @@ impl BrokerJournal {
                 || !valid_digest(&event.request_digest)
                 || !valid_text(&event.agent_id)
                 || event.nonce == 0
+                || event
+                    .destination_relpath
+                    .as_ref()
+                    .is_some_and(|value| !safe_relative_path(value))
                 || event
                     .decision_digest
                     .as_ref()
@@ -344,6 +366,7 @@ impl BrokerJournal {
                 event.request_digest.clone(),
                 event.agent_id.clone(),
                 event.nonce,
+                event.destination_relpath.clone(),
                 event.decision_digest.clone(),
                 event.capability_token_id.clone(),
                 event.status,
@@ -394,12 +417,19 @@ impl BrokerJournal {
         request_digest: &str,
         agent_id: &str,
         nonce: u64,
+        destination_relpath: Option<String>,
         decision_digest: Option<String>,
         capability_token_id: Option<String>,
         status: TransactionStatus,
         output_digest: Option<String>,
     ) -> Result<()> {
-        if !valid_digest(request_digest) || !valid_text(agent_id) || nonce == 0 {
+        if !valid_digest(request_digest)
+            || !valid_text(agent_id)
+            || nonce == 0
+            || destination_relpath
+                .as_ref()
+                .is_some_and(|value| !safe_relative_path(value))
+        {
             return Err(Error::Journal("broker event identity is malformed".into()));
         }
         if self.entries.iter().any(|event| {
@@ -431,6 +461,7 @@ impl BrokerJournal {
             request_digest.to_owned(),
             agent_id.to_owned(),
             nonce,
+            destination_relpath.clone(),
             decision_digest.clone(),
             capability_token_id.clone(),
             status,
@@ -442,6 +473,7 @@ impl BrokerJournal {
             request_digest: request_digest.into(),
             agent_id: agent_id.into(),
             nonce,
+            destination_relpath,
             decision_digest,
             capability_token_id,
             status,
@@ -493,6 +525,7 @@ pub struct BrokerConfig {
     pub journal_path: PathBuf,
     pub supervisor_path: PathBuf,
     pub kill_after_executing: bool,
+    pub kill_after_rename: bool,
 }
 
 pub struct Broker {
@@ -551,10 +584,22 @@ impl Broker {
             if !in_flight.is_empty() {
                 journal.frozen = true;
                 for event in in_flight {
+                    if let Some(destination_relpath) = &event.destination_relpath {
+                        let destination = safe_join(&workspace, destination_relpath)?;
+                        if destination.exists() {
+                            if !destination.is_file() {
+                                return Err(Error::Quarantined(
+                                    "in-flight destination is not a regular file".into(),
+                                ));
+                            }
+                            fs::remove_file(destination)?;
+                        }
+                    }
                     journal.append(
                         &event.request_digest,
                         &event.agent_id,
                         event.nonce,
+                        event.destination_relpath.clone(),
                         event.decision_digest,
                         event.capability_token_id,
                         TransactionStatus::Quarantined,
@@ -667,6 +712,12 @@ impl Broker {
         {
             return Self::quarantined(Some(request_digest), "evidence_unavailable", None);
         }
+        let evidence_digest = match self.evidence.record_digest(&request.evidence_id) {
+            Ok(value) => value,
+            Err(_) => {
+                return Self::quarantined(Some(request_digest), "evidence_digest_unavailable", None)
+            }
+        };
         let source = match safe_join(&self.workspace, &request.source_relpath) {
             Ok(value) => value,
             Err(_) => return Self::quarantined(Some(request_digest), "source_path_escape", None),
@@ -711,6 +762,7 @@ impl Broker {
                 &request_digest,
                 &request.agent_id,
                 request.nonce,
+                Some(request.destination_relpath.clone()),
                 Some(decision.decision_digest.clone()),
                 capability_token_id.clone(),
                 TransactionStatus::Admitted,
@@ -744,6 +796,7 @@ impl Broker {
                 &request_digest,
                 &request.agent_id,
                 request.nonce,
+                Some(request.destination_relpath.clone()),
                 Some(decision.decision_digest.clone()),
                 capability_token_id.clone(),
                 TransactionStatus::Executing,
@@ -798,6 +851,31 @@ impl Broker {
         let _ = fs::remove_file(&job_path);
         match result {
             Ok(output_digest) => {
+                if self.config.kill_after_rename {
+                    std::process::exit(137);
+                }
+                let execution_receipt = match self.signer.issue_execution(
+                    &receipt,
+                    &decision.decision_digest,
+                    &request.evidence_id,
+                    &evidence_digest,
+                    &request.input_digest,
+                    TRANSFORMER_ID,
+                    &output_digest,
+                    now,
+                ) {
+                    Ok(value) => value,
+                    Err(_) => {
+                        let _ = fs::remove_file(&destination);
+                        let _ = self.kernel.rollback(&proposal);
+                        self.freeze();
+                        return Self::quarantined(
+                            Some(request_digest),
+                            "execution_receipt_issue_failed",
+                            Some(receipt),
+                        );
+                    }
+                };
                 if self.kernel.complete(&proposal).is_err() {
                     let _ = fs::remove_file(&destination);
                     self.freeze();
@@ -813,6 +891,7 @@ impl Broker {
                         &request_digest,
                         &request.agent_id,
                         request.nonce,
+                        Some(request.destination_relpath.clone()),
                         Some(decision.decision_digest.clone()),
                         capability_token_id,
                         TransactionStatus::Committed,
@@ -832,8 +911,11 @@ impl Broker {
                 }
                 BrokerResponse::Completed {
                     request_digest,
-                    decision_digest: decision.decision_digest,
+                    decision_digest: decision.decision_digest.clone(),
+                    decision: Box::new(decision),
+                    policy: self.policy.clone(),
                     receipt,
+                    execution_receipt: Box::new(execution_receipt),
                     output_digest,
                 }
             }
@@ -846,6 +928,7 @@ impl Broker {
                         &request_digest,
                         &request.agent_id,
                         request.nonce,
+                        Some(request.destination_relpath.clone()),
                         Some(decision.decision_digest),
                         capability_token_id,
                         TransactionStatus::RolledBack,

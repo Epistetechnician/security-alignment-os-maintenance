@@ -1230,6 +1230,14 @@ impl EvidenceRegistry {
     pub fn is_valid(&self, id: &str, now: u64, subject: &str) -> bool {
         valid_digest(subject) && self.records.get(id).is_some_and(|e| e.valid(now, subject))
     }
+
+    pub fn record_digest(&self, id: &str) -> Result<String> {
+        let evidence = self
+            .records
+            .get(id)
+            .ok_or_else(|| Error::Quarantined("missing evidence".into()))?;
+        digest(evidence)
+    }
     pub fn revoke(&mut self, id: &str) -> Result<()> {
         let evidence = self
             .records

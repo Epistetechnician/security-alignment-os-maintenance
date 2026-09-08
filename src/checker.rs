@@ -9,7 +9,7 @@
 use crate::audit::AuditJournal;
 use crate::contract::{Lifecycle, LifecycleState};
 use crate::market::{SumJob, SumReceipt};
-use crate::receipts::CapabilityReceipt;
+use crate::receipts::{CapabilityReceipt, ExecutionReceipt};
 use crate::{
     canonical_bytes, digest, valid_digest, Action, Decision, DecisionKind, Error, Policy, Proposal,
     ReplayJournal, Result, STATE_SLICE,
@@ -98,6 +98,49 @@ struct ReceiptSigningPayload<'a> {
     candidate_digest: &'a str,
     policy_digest: &'a str,
     capability_digest: &'a str,
+    subject: &'a str,
+    agent_id: &'a str,
+    action: Action,
+    scope: &'a str,
+    issuer_key_id: &'a str,
+    issued_at: u64,
+    expires_at: u64,
+    receipt_id: &'a str,
+}
+
+#[derive(Clone, Debug, Serialize)]
+struct ExecutionReceiptIdentityPayload<'a> {
+    version: u8,
+    state_slice: &'static str,
+    capability_receipt_id: &'a str,
+    proposal_digest: &'a str,
+    decision_digest: &'a str,
+    evidence_id: &'a str,
+    evidence_digest: &'a str,
+    input_digest: &'a str,
+    operation_id: &'a str,
+    output_digest: &'a str,
+    subject: &'a str,
+    agent_id: &'a str,
+    action: Action,
+    scope: &'a str,
+    issuer_key_id: &'a str,
+    issued_at: u64,
+    expires_at: u64,
+}
+
+#[derive(Clone, Debug, Serialize)]
+struct ExecutionReceiptSigningPayload<'a> {
+    version: u8,
+    state_slice: &'static str,
+    capability_receipt_id: &'a str,
+    proposal_digest: &'a str,
+    decision_digest: &'a str,
+    evidence_id: &'a str,
+    evidence_digest: &'a str,
+    input_digest: &'a str,
+    operation_id: &'a str,
+    output_digest: &'a str,
     subject: &'a str,
     agent_id: &'a str,
     action: Action,
@@ -385,4 +428,113 @@ pub fn validate_capability_receipt(
         &Signature::from_bytes(&signature_bytes),
     )
     .map_err(|_| Error::Rejected("independent capability signature check failed".into()))
+}
+
+/// Independently validates a signed broker execution receipt. This checker
+/// deliberately duplicates the receipt identity and signature equations and
+/// never trusts producer validation. It proves only that the broker key signed
+/// a result bound to one capability receipt, evidence identity, input digest,
+/// operation, and output digest.
+#[allow(clippy::too_many_arguments)]
+pub fn validate_execution_receipt(
+    receipt: &ExecutionReceipt,
+    capability_receipt: &CapabilityReceipt,
+    evidence_id: &str,
+    evidence_digest: &str,
+    input_digest: &str,
+    operation_id: &str,
+    expected_decision_digest: &str,
+    now: u64,
+    public_key: [u8; 32],
+) -> Result<()> {
+    if !valid_digest(&receipt.capability_receipt_id)
+        || !valid_digest(&receipt.proposal_digest)
+        || !valid_digest(&receipt.decision_digest)
+        || !valid_digest(&receipt.evidence_digest)
+        || !valid_digest(&receipt.input_digest)
+        || !valid_digest(&receipt.output_digest)
+        || !valid_digest(&receipt.receipt_id)
+        || !valid_text(&receipt.evidence_id)
+        || !valid_text(&receipt.operation_id)
+        || !valid_text(&receipt.subject)
+        || !valid_text(&receipt.agent_id)
+        || !valid_text(&receipt.scope)
+        || !valid_text(&receipt.issuer_key_id)
+        || receipt.signature.len() != SIGNATURE_LEN
+        || receipt.issued_at >= receipt.expires_at
+        || receipt.issued_at > now
+        || now >= receipt.expires_at
+        || receipt.capability_receipt_id != capability_receipt.receipt_id
+        || receipt.proposal_digest != capability_receipt.proposal_digest
+        || receipt.subject != capability_receipt.subject
+        || receipt.agent_id != capability_receipt.agent_id
+        || receipt.action != capability_receipt.action
+        || receipt.scope != capability_receipt.scope
+        || receipt.issuer_key_id != capability_receipt.issuer_key_id
+        || receipt.evidence_id != evidence_id
+        || receipt.evidence_digest != evidence_digest
+        || receipt.input_digest != input_digest
+        || receipt.operation_id != operation_id
+        || receipt.decision_digest != expected_decision_digest
+    {
+        return Err(Error::Rejected(
+            "independent execution receipt binding check failed".into(),
+        ));
+    }
+    let expected_receipt_id = digest(&ExecutionReceiptIdentityPayload {
+        version: RECEIPT_VERSION,
+        state_slice: STATE_SLICE,
+        capability_receipt_id: &receipt.capability_receipt_id,
+        proposal_digest: &receipt.proposal_digest,
+        decision_digest: &receipt.decision_digest,
+        evidence_id: &receipt.evidence_id,
+        evidence_digest: &receipt.evidence_digest,
+        input_digest: &receipt.input_digest,
+        operation_id: &receipt.operation_id,
+        output_digest: &receipt.output_digest,
+        subject: &receipt.subject,
+        agent_id: &receipt.agent_id,
+        action: receipt.action,
+        scope: &receipt.scope,
+        issuer_key_id: &receipt.issuer_key_id,
+        issued_at: receipt.issued_at,
+        expires_at: receipt.expires_at,
+    })?;
+    if receipt.receipt_id != expected_receipt_id {
+        return Err(Error::Rejected(
+            "independent execution receipt identity check failed".into(),
+        ));
+    }
+    let signing_payload = ExecutionReceiptSigningPayload {
+        version: RECEIPT_VERSION,
+        state_slice: STATE_SLICE,
+        capability_receipt_id: &receipt.capability_receipt_id,
+        proposal_digest: &receipt.proposal_digest,
+        decision_digest: &receipt.decision_digest,
+        evidence_id: &receipt.evidence_id,
+        evidence_digest: &receipt.evidence_digest,
+        input_digest: &receipt.input_digest,
+        operation_id: &receipt.operation_id,
+        output_digest: &receipt.output_digest,
+        subject: &receipt.subject,
+        agent_id: &receipt.agent_id,
+        action: receipt.action,
+        scope: &receipt.scope,
+        issuer_key_id: &receipt.issuer_key_id,
+        issued_at: receipt.issued_at,
+        expires_at: receipt.expires_at,
+        receipt_id: &receipt.receipt_id,
+    };
+    let key = VerifyingKey::from_bytes(&public_key)
+        .map_err(|_| Error::Rejected("independent execution public key invalid".into()))?;
+    let signature_bytes: [u8; SIGNATURE_LEN] = receipt
+        .signature
+        .as_slice()
+        .try_into()
+        .map_err(|_| Error::Rejected("independent execution signature invalid".into()))?;
+    key.verify(
+        &canonical_bytes(&signing_payload)?,
+        &Signature::from_bytes(&signature_bytes),
+    )
+    .map_err(|_| Error::Rejected("independent execution signature check failed".into()))
 }

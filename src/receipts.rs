@@ -230,6 +230,200 @@ impl CapabilityReceipt {
     }
 }
 
+#[derive(Clone, Deserialize, Eq, PartialEq, Serialize)]
+pub struct ExecutionReceipt {
+    pub capability_receipt_id: String,
+    pub proposal_digest: String,
+    pub decision_digest: String,
+    pub evidence_id: String,
+    pub evidence_digest: String,
+    pub input_digest: String,
+    pub operation_id: String,
+    pub output_digest: String,
+    pub subject: String,
+    pub agent_id: String,
+    pub action: Action,
+    pub scope: String,
+    pub issuer_key_id: String,
+    pub issued_at: u64,
+    pub expires_at: u64,
+    pub signature: Vec<u8>,
+    pub receipt_id: String,
+}
+
+impl fmt::Debug for ExecutionReceipt {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ExecutionReceipt")
+            .field("capability_receipt_id", &self.capability_receipt_id)
+            .field("proposal_digest", &self.proposal_digest)
+            .field("decision_digest", &self.decision_digest)
+            .field("evidence_id", &self.evidence_id)
+            .field("evidence_digest", &self.evidence_digest)
+            .field("input_digest", &self.input_digest)
+            .field("operation_id", &self.operation_id)
+            .field("output_digest", &self.output_digest)
+            .field("subject", &self.subject)
+            .field("agent_id", &self.agent_id)
+            .field("action", &self.action)
+            .field("scope", &self.scope)
+            .field("issuer_key_id", &self.issuer_key_id)
+            .field("issued_at", &self.issued_at)
+            .field("expires_at", &self.expires_at)
+            .field("signature", &"<redacted>")
+            .field("receipt_id", &self.receipt_id)
+            .finish()
+    }
+}
+
+#[derive(Clone, Debug, Serialize)]
+struct ExecutionReceiptIdentityPayload<'a> {
+    version: u8,
+    state_slice: &'static str,
+    capability_receipt_id: &'a str,
+    proposal_digest: &'a str,
+    decision_digest: &'a str,
+    evidence_id: &'a str,
+    evidence_digest: &'a str,
+    input_digest: &'a str,
+    operation_id: &'a str,
+    output_digest: &'a str,
+    subject: &'a str,
+    agent_id: &'a str,
+    action: Action,
+    scope: &'a str,
+    issuer_key_id: &'a str,
+    issued_at: u64,
+    expires_at: u64,
+}
+
+#[derive(Clone, Debug, Serialize)]
+struct ExecutionReceiptSigningPayload<'a> {
+    version: u8,
+    state_slice: &'static str,
+    capability_receipt_id: &'a str,
+    proposal_digest: &'a str,
+    decision_digest: &'a str,
+    evidence_id: &'a str,
+    evidence_digest: &'a str,
+    input_digest: &'a str,
+    operation_id: &'a str,
+    output_digest: &'a str,
+    subject: &'a str,
+    agent_id: &'a str,
+    action: Action,
+    scope: &'a str,
+    issuer_key_id: &'a str,
+    issued_at: u64,
+    expires_at: u64,
+    receipt_id: &'a str,
+}
+
+impl ExecutionReceipt {
+    fn identity_payload(&self) -> ExecutionReceiptIdentityPayload<'_> {
+        ExecutionReceiptIdentityPayload {
+            version: RECEIPT_VERSION,
+            state_slice: STATE_SLICE,
+            capability_receipt_id: &self.capability_receipt_id,
+            proposal_digest: &self.proposal_digest,
+            decision_digest: &self.decision_digest,
+            evidence_id: &self.evidence_id,
+            evidence_digest: &self.evidence_digest,
+            input_digest: &self.input_digest,
+            operation_id: &self.operation_id,
+            output_digest: &self.output_digest,
+            subject: &self.subject,
+            agent_id: &self.agent_id,
+            action: self.action,
+            scope: &self.scope,
+            issuer_key_id: &self.issuer_key_id,
+            issued_at: self.issued_at,
+            expires_at: self.expires_at,
+        }
+    }
+
+    fn signing_payload(&self) -> ExecutionReceiptSigningPayload<'_> {
+        ExecutionReceiptSigningPayload {
+            version: RECEIPT_VERSION,
+            state_slice: STATE_SLICE,
+            capability_receipt_id: &self.capability_receipt_id,
+            proposal_digest: &self.proposal_digest,
+            decision_digest: &self.decision_digest,
+            evidence_id: &self.evidence_id,
+            evidence_digest: &self.evidence_digest,
+            input_digest: &self.input_digest,
+            operation_id: &self.operation_id,
+            output_digest: &self.output_digest,
+            subject: &self.subject,
+            agent_id: &self.agent_id,
+            action: self.action,
+            scope: &self.scope,
+            issuer_key_id: &self.issuer_key_id,
+            issued_at: self.issued_at,
+            expires_at: self.expires_at,
+            receipt_id: &self.receipt_id,
+        }
+    }
+
+    fn signing_bytes(&self) -> Result<Vec<u8>> {
+        canonical_bytes(&self.signing_payload())
+    }
+
+    fn expected_id(&self) -> Result<String> {
+        digest(&self.identity_payload())
+    }
+
+    fn validate_shape(&self) -> Result<()> {
+        if !valid_digest(&self.capability_receipt_id)
+            || !valid_digest(&self.proposal_digest)
+            || !valid_digest(&self.decision_digest)
+            || !valid_digest(&self.evidence_digest)
+            || !valid_digest(&self.input_digest)
+            || !valid_digest(&self.output_digest)
+            || !valid_digest(&self.receipt_id)
+        {
+            return Err(Error::Invalid(
+                "execution receipt digest fields are malformed".into(),
+            ));
+        }
+        if !valid_text(&self.evidence_id)
+            || !valid_text(&self.operation_id)
+            || !valid_text(&self.subject)
+            || !valid_text(&self.agent_id)
+            || !valid_text(&self.scope)
+            || !valid_key_id(&self.issuer_key_id)
+        {
+            return Err(Error::Invalid(
+                "execution receipt identity fields are malformed".into(),
+            ));
+        }
+        if self.issued_at >= self.expires_at {
+            return Err(Error::Invalid(
+                "execution receipt issuance window is invalid".into(),
+            ));
+        }
+        if self.signature.len() != SIGNATURE_LEN {
+            return Err(Error::Invalid(
+                "execution receipt signature length is invalid".into(),
+            ));
+        }
+        if self.receipt_id != self.expected_id()? {
+            return Err(Error::Invalid(
+                "execution receipt identity digest mismatch".into(),
+            ));
+        }
+        Ok(())
+    }
+
+    pub fn validate(&self) -> Result<()> {
+        self.validate_shape()
+    }
+
+    pub fn is_valid_at(&self, now: u64) -> bool {
+        self.validate_shape().is_ok() && self.issued_at <= now && now < self.expires_at
+    }
+}
+
 /// Ed25519 receipt issuer. The private key is deliberately not exposed or
 /// included in `Debug`, serialization, or receipt fields.
 pub struct ReceiptSigner {
@@ -356,6 +550,63 @@ impl ReceiptSigner {
             issuer_key_id: self.key_id.clone(),
             issued_at,
             expires_at,
+            signature: Vec::new(),
+            receipt_id: String::new(),
+        };
+        receipt.receipt_id = receipt.expected_id()?;
+        receipt.signature = self
+            .signing_key
+            .sign(&receipt.signing_bytes()?)
+            .to_bytes()
+            .to_vec();
+        receipt.validate_shape()?;
+        Ok(receipt)
+    }
+
+    /// Issues a broker result receipt only after the caller has validated the
+    /// completed output. The receipt is bound to the earlier capability
+    /// receipt and carries no authority of its own.
+    #[allow(clippy::too_many_arguments)]
+    pub fn issue_execution(
+        &self,
+        capability_receipt: &CapabilityReceipt,
+        decision_digest: &str,
+        evidence_id: &str,
+        evidence_digest: &str,
+        input_digest: &str,
+        operation_id: &str,
+        output_digest: &str,
+        now: u64,
+    ) -> Result<ExecutionReceipt> {
+        capability_receipt.validate_shape()?;
+        if !capability_receipt.is_valid_at(now)
+            || !valid_digest(decision_digest)
+            || !valid_text(evidence_id)
+            || !valid_digest(evidence_digest)
+            || !valid_digest(input_digest)
+            || !valid_text(operation_id)
+            || !valid_digest(output_digest)
+        {
+            return Err(Error::Rejected(
+                "execution receipt binding or validity failed".into(),
+            ));
+        }
+        let mut receipt = ExecutionReceipt {
+            capability_receipt_id: capability_receipt.receipt_id.clone(),
+            proposal_digest: capability_receipt.proposal_digest.clone(),
+            decision_digest: decision_digest.into(),
+            evidence_id: evidence_id.into(),
+            evidence_digest: evidence_digest.into(),
+            input_digest: input_digest.into(),
+            operation_id: operation_id.into(),
+            output_digest: output_digest.into(),
+            subject: capability_receipt.subject.clone(),
+            agent_id: capability_receipt.agent_id.clone(),
+            action: capability_receipt.action,
+            scope: capability_receipt.scope.clone(),
+            issuer_key_id: self.key_id.clone(),
+            issued_at: now,
+            expires_at: capability_receipt.expires_at,
             signature: Vec::new(),
             receipt_id: String::new(),
         };
@@ -524,6 +775,63 @@ impl ReceiptVerifier {
         verifying_key
             .verify(&receipt.signing_bytes()?, &signature)
             .map_err(|_| Error::Rejected("receipt signature verification failed".into()))
+    }
+
+    pub fn verify_execution_signature(&self, receipt: &ExecutionReceipt) -> Result<()> {
+        receipt.validate_shape()?;
+        let verifying_key = self
+            .trusted_keys
+            .get(&receipt.issuer_key_id)
+            .ok_or_else(|| Error::Rejected("issuer key is not trusted".into()))?;
+        let signature_bytes: [u8; SIGNATURE_LEN] =
+            receipt.signature.as_slice().try_into().map_err(|_| {
+                Error::Invalid("execution receipt signature length is invalid".into())
+            })?;
+        let signature = Signature::from_bytes(&signature_bytes);
+        verifying_key
+            .verify(&receipt.signing_bytes()?, &signature)
+            .map_err(|_| Error::Rejected("execution receipt signature verification failed".into()))
+    }
+
+    /// Verifies an execution receipt's signature and exact linkage to the
+    /// capability receipt. Callers can then apply their own evidence and
+    /// output-schema checks before treating the result as accepted.
+    #[allow(clippy::too_many_arguments)]
+    pub fn verify_execution(
+        &mut self,
+        receipt: &ExecutionReceipt,
+        capability_receipt: &CapabilityReceipt,
+        evidence_id: &str,
+        evidence_digest: &str,
+        input_digest: &str,
+        operation_id: &str,
+        expected_decision_digest: &str,
+        now: u64,
+    ) -> Result<()> {
+        receipt.validate_shape()?;
+        if !receipt.is_valid_at(now)
+            || receipt.capability_receipt_id != capability_receipt.receipt_id
+            || receipt.proposal_digest != capability_receipt.proposal_digest
+            || receipt.subject != capability_receipt.subject
+            || receipt.agent_id != capability_receipt.agent_id
+            || receipt.action != capability_receipt.action
+            || receipt.scope != capability_receipt.scope
+            || receipt.issuer_key_id != capability_receipt.issuer_key_id
+            || receipt.evidence_id != evidence_id
+            || receipt.evidence_digest != evidence_digest
+            || receipt.input_digest != input_digest
+            || receipt.operation_id != operation_id
+            || receipt.decision_digest != expected_decision_digest
+            || self.verified.contains(&receipt.receipt_id)
+        {
+            return Err(Error::Rejected(
+                "execution receipt linkage or replay failed".into(),
+            ));
+        }
+        self.verify_signature(capability_receipt)?;
+        self.verify_execution_signature(receipt)?;
+        self.verified.insert(receipt.receipt_id.clone());
+        Ok(())
     }
 
     /// Verifies signature, freshness, exact decision binding, and delegation

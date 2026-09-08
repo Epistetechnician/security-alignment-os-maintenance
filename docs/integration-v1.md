@@ -150,6 +150,16 @@ supervisor rejection, path validation, malformed child-operation containment,
 telemetry freeze, and crash recovery. This evidence is limited to the named
 host backend and one operation.
 
+`integration::accept_broker_completion` is the read-only handoff from that
+process boundary into the evidence plane. It requires a caller-pinned broker
+issuer key, recomputes the request and decision digests, checks live evidence
+and its exact record digest, independently validates both signed receipts,
+resolves the source and destination through the broker workspace path guard,
+and recomputes the uppercase transformation and output digest. It returns
+digest-only completion metadata and does not recreate or mutate local kernel,
+runtime, or capability state. A forged output, wrong issuer, revoked evidence,
+stale source, or noncanonical response is rejected.
+
 ## Remaining execution gates
 
 - Linux host hardening, authenticated process identity, independent replication,

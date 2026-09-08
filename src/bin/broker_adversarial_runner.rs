@@ -135,10 +135,16 @@ fn main() {
         Ok(value) => value,
         Err(_) => fail(),
     };
-    let (replay, forged_receipt) = match first {
-        BrokerResponse::Completed { receipt, .. } => {
+    let (replay, forged_receipt, forged_execution_receipt) = match first {
+        BrokerResponse::Completed {
+            receipt,
+            execution_receipt,
+            ..
+        } => {
             let mut forged = receipt.clone();
             forged.signature[0] ^= 1;
+            let mut forged_execution = execution_receipt.clone();
+            forged_execution.signature[0] ^= 1;
             let verifier = ReceiptVerifier::with_key(
                 hello.issuer_key_id,
                 match hello.issuer_public_key.try_into() {
@@ -148,13 +154,16 @@ fn main() {
             )
             .unwrap_or_else(|_| fail());
             let forged_rejected = verifier.verify_signature(&forged).is_err();
+            let forged_execution_rejected = verifier
+                .verify_execution_signature(&forged_execution)
+                .is_err();
             let replay = matches!(
                 client.request(BrokerRequest::Execute(Box::new(request.clone()))),
                 Ok(BrokerResponse::Rejected { code, .. }) if code == "replay"
             );
-            (replay, forged_rejected)
+            (replay, forged_rejected, forged_execution_rejected)
         }
-        BrokerResponse::Rejected { code, .. } if code == "replay" => (true, true),
+        BrokerResponse::Rejected { code, .. } if code == "replay" => (true, true, true),
         _ => fail(),
     };
     let mut telemetry = request;
@@ -172,6 +181,7 @@ fn main() {
         "path_escape_rejected": path_escape,
         "replay_rejected": replay,
         "forged_receipt_rejected": forged_receipt,
+        "forged_execution_receipt_rejected": forged_execution_receipt,
         "missing_telemetry_froze": telemetry_frozen,
         "malformed_child_operation_contained": child_input,
     });
@@ -179,7 +189,14 @@ fn main() {
         "{}",
         serde_json::to_string(&summary).unwrap_or_else(|_| "{}".into())
     );
-    if !direct || !path_escape || !replay || !forged_receipt || !telemetry_frozen || !child_input {
+    if !direct
+        || !path_escape
+        || !replay
+        || !forged_receipt
+        || !forged_execution_receipt
+        || !telemetry_frozen
+        || !child_input
+    {
         fail();
     }
 }

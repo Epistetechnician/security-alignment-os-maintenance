@@ -10,7 +10,8 @@
 //! or an independent human operator.
 
 use crate::maintenance_process::{
-    fixed_input_digest, fixed_policy_digest, fixed_tests_digest, PROCESS_VERSION,
+    fixed_input_digest, fixed_policy_digest, fixed_tests_digest, normalize_trailing_ascii_spaces,
+    Request, MAX_PATCH_BYTES, PROCESS_VERSION,
 };
 use crate::{canonical_bytes, digest, valid_digest, Error, Result, STATE_SLICE};
 use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
@@ -21,15 +22,27 @@ pub const REPLICATION_VERSION: u8 = 1;
 pub const FIXED_OPERATION_IDENTITY: &str = crate::maintenance_process::FIXED_INPUT_IDENTITY;
 pub const REPLICATION_CLAIM_CEILING: &str =
     "local signed wire-consistency evidence for this fixed maintenance operation only";
-pub const REQUIRED_SCENARIOS: [&str; 8] = [
+pub const REQUIRED_SCENARIOS: [&str; 20] = [
     "authorized-completion",
+    "replay-after-completion",
+    "invalid-or-stale-baseline",
+    "pre-admission-expiry",
+    "pre-admission-cancellation",
+    "evaluator-requirement-substitution",
+    "path-escape",
+    "link-escape",
     "evaluation-expiry",
     "pre-finalization-cancellation",
     "pre-finalization-expiry",
+    "crash-after-durable-intent",
+    "crash-after-replacement",
     "concurrent-target-change",
+    "completion-state-persistence-failure",
     "neighbor-change-recovery",
-    "shared-checkout-lock",
+    "occupied-lock",
+    "cross-state-directory-lock-contention",
     "replacement-lock-ownership",
+    "recovery-config-redirect",
 ];
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -39,6 +52,7 @@ pub enum ScenarioStatus {
     RolledBack,
     Frozen,
     Blocked,
+    ProcessError,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -47,13 +61,39 @@ pub enum RecoveryDisposition {
     NoMutation,
     BaselineRestored,
     ExternalChangePreservedAndFrozen,
+    AlreadyAppliedPreserved,
+    AlternateCheckoutPreserved,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub enum ScenarioRole {
+    Primary,
+    Winner,
+    Contender,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub enum ManifestFileKind {
+    Regular,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct BaselineManifestEntry {
+    pub relative_path: String,
+    pub byte_length: u64,
+    pub content_digest: String,
+    pub file_kind: ManifestFileKind,
+    pub link_count: u64,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct ScenarioResult {
     pub scenario_id: String,
+    pub role: ScenarioRole,
     pub status: ScenarioStatus,
+    pub recovery_status: Option<ScenarioStatus>,
     pub recovery: RecoveryDisposition,
+    pub initial_checkout_digest: String,
     pub final_checkout_digest: String,
     /// Digest of the operator-supplied local reproduction evidence.
     pub evidence_digest: String,
@@ -67,8 +107,11 @@ pub struct HostReport {
     pub process_version: u8,
     /// Exact source revision used for the fixed operation.
     pub implementation_revision: String,
+    /// Digest of the canonical `rustc -Vv` toolchain record.
+    pub toolchain_digest: String,
     pub request_digest: String,
     pub checkout_baseline_digest: String,
+    pub baseline_manifest_digest: String,
     pub evaluator_executable_digest: String,
     pub evaluator_input_digest: String,
     pub evaluator_tests_digest: String,
@@ -96,8 +139,12 @@ pub struct ReplicationPacket {
     pub operation: String,
     pub process_version: u8,
     pub implementation_revision: String,
+    pub toolchain_digest: String,
     pub request_digest: String,
     pub checkout_baseline_digest: String,
+    pub baseline_manifest_digest: String,
+    pub request: Request,
+    pub baseline_manifest: Vec<BaselineManifestEntry>,
     pub evaluator_executable_digest: String,
     pub evaluator_input_digest: String,
     pub evaluator_tests_digest: String,
@@ -116,8 +163,10 @@ struct ReportIdentityPayload<'a> {
     operation: &'a str,
     process_version: u8,
     implementation_revision: &'a str,
+    toolchain_digest: &'a str,
     request_digest: &'a str,
     checkout_baseline_digest: &'a str,
+    baseline_manifest_digest: &'a str,
     evaluator_executable_digest: &'a str,
     evaluator_input_digest: &'a str,
     evaluator_tests_digest: &'a str,
@@ -139,8 +188,10 @@ struct ReportSigningPayload<'a> {
     operation: &'a str,
     process_version: u8,
     implementation_revision: &'a str,
+    toolchain_digest: &'a str,
     request_digest: &'a str,
     checkout_baseline_digest: &'a str,
+    baseline_manifest_digest: &'a str,
     evaluator_executable_digest: &'a str,
     evaluator_input_digest: &'a str,
     evaluator_tests_digest: &'a str,
@@ -163,8 +214,10 @@ struct PacketIdentityPayload<'a> {
     operation: &'a str,
     process_version: u8,
     implementation_revision: &'a str,
+    toolchain_digest: &'a str,
     request_digest: &'a str,
     checkout_baseline_digest: &'a str,
+    baseline_manifest_digest: &'a str,
     evaluator_executable_digest: &'a str,
     evaluator_input_digest: &'a str,
     evaluator_tests_digest: &'a str,
@@ -220,34 +273,175 @@ fn decode_fixed<const N: usize>(value: &str) -> Result<[u8; N]> {
     Ok(output)
 }
 
-fn expected_scenario(scenario_id: &str) -> Option<(ScenarioStatus, RecoveryDisposition)> {
+fn expected_scenario(
+    scenario_id: &str,
+    role: ScenarioRole,
+) -> Option<(ScenarioStatus, Option<ScenarioStatus>, RecoveryDisposition)> {
     match scenario_id {
         "authorized-completion" => Some((
             ScenarioStatus::Applied,
+            None,
             RecoveryDisposition::AuthorizedChangeCommitted,
         )),
-        "evaluation-expiry" => Some((ScenarioStatus::Quarantined, RecoveryDisposition::NoMutation)),
-        "pre-finalization-cancellation" => Some((
+        "replay-after-completion"
+        | "invalid-or-stale-baseline"
+        | "pre-admission-expiry"
+        | "pre-admission-cancellation"
+        | "evaluator-requirement-substitution"
+        | "path-escape"
+        | "link-escape"
+        | "evaluation-expiry" => Some((
+            ScenarioStatus::Quarantined,
+            None,
+            if scenario_id == "replay-after-completion" {
+                RecoveryDisposition::AlreadyAppliedPreserved
+            } else {
+                RecoveryDisposition::NoMutation
+            },
+        )),
+        "pre-finalization-cancellation" | "pre-finalization-expiry" => Some((
             ScenarioStatus::RolledBack,
+            None,
             RecoveryDisposition::BaselineRestored,
         )),
-        "pre-finalization-expiry" => Some((
-            ScenarioStatus::RolledBack,
+        "crash-after-durable-intent" | "crash-after-replacement" => Some((
+            ScenarioStatus::ProcessError,
+            Some(ScenarioStatus::Frozen),
             RecoveryDisposition::BaselineRestored,
         )),
-        "concurrent-target-change" => Some((
+        "completion-state-persistence-failure" => Some((
+            ScenarioStatus::ProcessError,
+            Some(ScenarioStatus::Frozen),
+            RecoveryDisposition::BaselineRestored,
+        )),
+        "concurrent-target-change" | "neighbor-change-recovery" => Some((
             ScenarioStatus::Frozen,
+            None,
             RecoveryDisposition::ExternalChangePreservedAndFrozen,
         )),
-        "neighbor-change-recovery" => Some((
-            ScenarioStatus::Frozen,
-            RecoveryDisposition::ExternalChangePreservedAndFrozen,
+        "occupied-lock" => Some((
+            ScenarioStatus::ProcessError,
+            None,
+            RecoveryDisposition::NoMutation,
         )),
-        "shared-checkout-lock" | "replacement-lock-ownership" => {
-            Some((ScenarioStatus::Blocked, RecoveryDisposition::NoMutation))
-        }
+        "cross-state-directory-lock-contention" => match role {
+            ScenarioRole::Winner => Some((
+                ScenarioStatus::Applied,
+                None,
+                RecoveryDisposition::AuthorizedChangeCommitted,
+            )),
+            ScenarioRole::Contender => Some((
+                ScenarioStatus::Blocked,
+                None,
+                RecoveryDisposition::NoMutation,
+            )),
+            ScenarioRole::Primary => None,
+        },
+        "replacement-lock-ownership" if role == ScenarioRole::Winner => Some((
+            ScenarioStatus::Applied,
+            None,
+            RecoveryDisposition::AuthorizedChangeCommitted,
+        )),
+        "recovery-config-redirect" => Some((
+            ScenarioStatus::ProcessError,
+            None,
+            RecoveryDisposition::AlternateCheckoutPreserved,
+        )),
         _ => None,
     }
+}
+
+fn scenario_role(report: &HostReport, scenario_id: &str) -> Option<ScenarioRole> {
+    report
+        .scenarios
+        .iter()
+        .find(|scenario| scenario.scenario_id == scenario_id)
+        .map(|scenario| scenario.role)
+}
+
+fn valid_relative_path(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 4096
+        && !value.starts_with('/')
+        && !value.contains('\\')
+        && !value.contains(':')
+        && !value.chars().any(char::is_control)
+        && value
+            .split('/')
+            .all(|part| !part.is_empty() && part != "." && part != "..")
+}
+
+fn validate_request_binding(request: &Request) -> Result<()> {
+    if !valid_text(&request.request_id)
+        || request.nonce == 0
+        || request.lease_expires_at == 0
+        || request.before_bytes.len() > MAX_PATCH_BYTES
+        || request.after_bytes.len() > MAX_PATCH_BYTES
+        || request.before_bytes == request.after_bytes
+        || !valid_relative_path(&request.relative_path)
+        || request.relative_path.split('/').count() != 1
+        || !request.relative_path.ends_with(".md")
+        || !valid_digest(&request.before_digest)
+        || request.before_digest != crate::digest_bytes(&request.before_bytes)
+        || !valid_digest(&request.after_digest)
+        || request.after_digest != crate::digest_bytes(&request.after_bytes)
+        || normalize_trailing_ascii_spaces(&request.before_bytes) != request.after_bytes
+        || !valid_digest(&request.checkout_baseline_digest)
+    {
+        return Err(Error::Rejected(
+            "replication request binding is invalid".into(),
+        ));
+    }
+    Ok(())
+}
+
+pub fn validate_baseline_manifest(entries: &[BaselineManifestEntry]) -> Result<()> {
+    if entries.is_empty() || entries.len() > 4096 {
+        return Err(Error::Rejected(
+            "replication baseline manifest size is invalid".into(),
+        ));
+    }
+    let mut previous = None;
+    let mut total_bytes = 0_u64;
+    for entry in entries {
+        if !valid_relative_path(&entry.relative_path)
+            || !valid_digest(&entry.content_digest)
+            || entry.byte_length > 32 * 1024 * 1024
+            || entry.file_kind != ManifestFileKind::Regular
+            || entry.link_count != 1
+            || previous.is_some_and(|path: &str| path >= entry.relative_path.as_str())
+        {
+            return Err(Error::Rejected(
+                "replication baseline manifest entry is invalid".into(),
+            ));
+        }
+        total_bytes = total_bytes
+            .checked_add(entry.byte_length)
+            .ok_or_else(|| Error::Rejected("replication baseline manifest is too large".into()))?;
+        if total_bytes > 32 * 1024 * 1024 {
+            return Err(Error::Rejected(
+                "replication baseline manifest is too large".into(),
+            ));
+        }
+        previous = Some(entry.relative_path.as_str());
+    }
+    Ok(())
+}
+
+#[derive(Clone, Debug, Serialize)]
+struct BaselineManifestPayload<'a> {
+    version: u8,
+    state_slice: &'a str,
+    entries: &'a [BaselineManifestEntry],
+}
+
+pub fn baseline_manifest_digest(entries: &[BaselineManifestEntry]) -> Result<String> {
+    validate_baseline_manifest(entries)?;
+    digest(&BaselineManifestPayload {
+        version: REPLICATION_VERSION,
+        state_slice: STATE_SLICE,
+        entries,
+    })
 }
 
 impl HostReport {
@@ -258,8 +452,10 @@ impl HostReport {
             operation: &self.operation,
             process_version: self.process_version,
             implementation_revision: &self.implementation_revision,
+            toolchain_digest: &self.toolchain_digest,
             request_digest: &self.request_digest,
             checkout_baseline_digest: &self.checkout_baseline_digest,
+            baseline_manifest_digest: &self.baseline_manifest_digest,
             evaluator_executable_digest: &self.evaluator_executable_digest,
             evaluator_input_digest: &self.evaluator_input_digest,
             evaluator_tests_digest: &self.evaluator_tests_digest,
@@ -282,8 +478,10 @@ impl HostReport {
             operation: &self.operation,
             process_version: self.process_version,
             implementation_revision: &self.implementation_revision,
+            toolchain_digest: &self.toolchain_digest,
             request_digest: &self.request_digest,
             checkout_baseline_digest: &self.checkout_baseline_digest,
+            baseline_manifest_digest: &self.baseline_manifest_digest,
             evaluator_executable_digest: &self.evaluator_executable_digest,
             evaluator_input_digest: &self.evaluator_input_digest,
             evaluator_tests_digest: &self.evaluator_tests_digest,
@@ -327,8 +525,10 @@ impl HostReport {
             || self.operation != FIXED_OPERATION_IDENTITY
             || self.process_version != PROCESS_VERSION
             || !valid_revision(&self.implementation_revision)
+            || !valid_digest(&self.toolchain_digest)
             || !valid_digest(&self.request_digest)
             || !valid_digest(&self.checkout_baseline_digest)
+            || !valid_digest(&self.baseline_manifest_digest)
             || !valid_digest(&self.evaluator_executable_digest)
             || self.evaluator_input_digest != fixed_input_digest()
             || self.evaluator_tests_digest != fixed_tests_digest()
@@ -354,7 +554,9 @@ impl HostReport {
         }
         let mut seen = BTreeSet::new();
         for (scenario, expected_id) in self.scenarios.iter().zip(REQUIRED_SCENARIOS) {
-            let Some((expected_status, expected_recovery)) = expected_scenario(expected_id) else {
+            let Some((expected_status, expected_recovery_status, expected_recovery)) =
+                expected_scenario(expected_id, scenario.role)
+            else {
                 return Err(Error::Rejected(
                     "maintenance scenario contract is invalid".into(),
                 ));
@@ -362,7 +564,9 @@ impl HostReport {
             if scenario.scenario_id != expected_id
                 || !seen.insert(scenario.scenario_id.clone())
                 || scenario.status != expected_status
+                || scenario.recovery_status != expected_recovery_status
                 || scenario.recovery != expected_recovery
+                || !valid_digest(&scenario.initial_checkout_digest)
                 || !valid_digest(&scenario.final_checkout_digest)
                 || !valid_digest(&scenario.evidence_digest)
             {
@@ -370,13 +574,30 @@ impl HostReport {
                     "maintenance scenario result is invalid".into(),
                 ));
             }
-            let must_match_baseline = matches!(
-                scenario.recovery,
-                RecoveryDisposition::NoMutation | RecoveryDisposition::BaselineRestored
-            );
-            if must_match_baseline
-                != (scenario.final_checkout_digest == self.checkout_baseline_digest)
-            {
+            let state_is_consistent = match scenario.recovery {
+                RecoveryDisposition::AuthorizedChangeCommitted => {
+                    scenario.initial_checkout_digest == self.checkout_baseline_digest
+                        && scenario.final_checkout_digest != self.checkout_baseline_digest
+                }
+                RecoveryDisposition::NoMutation => {
+                    scenario.initial_checkout_digest == self.checkout_baseline_digest
+                        && scenario.final_checkout_digest == scenario.initial_checkout_digest
+                }
+                RecoveryDisposition::BaselineRestored => {
+                    scenario.initial_checkout_digest == self.checkout_baseline_digest
+                        && scenario.final_checkout_digest == self.checkout_baseline_digest
+                }
+                RecoveryDisposition::ExternalChangePreservedAndFrozen => {
+                    scenario.initial_checkout_digest == self.checkout_baseline_digest
+                        && scenario.final_checkout_digest != self.checkout_baseline_digest
+                }
+                RecoveryDisposition::AlreadyAppliedPreserved
+                | RecoveryDisposition::AlternateCheckoutPreserved => {
+                    scenario.initial_checkout_digest != self.checkout_baseline_digest
+                        && scenario.final_checkout_digest == scenario.initial_checkout_digest
+                }
+            };
+            if !state_is_consistent {
                 return Err(Error::Rejected(
                     "maintenance scenario baseline result is inconsistent".into(),
                 ));
@@ -422,8 +643,10 @@ impl ReplicationPacket {
             operation: &self.operation,
             process_version: self.process_version,
             implementation_revision: &self.implementation_revision,
+            toolchain_digest: &self.toolchain_digest,
             request_digest: &self.request_digest,
             checkout_baseline_digest: &self.checkout_baseline_digest,
+            baseline_manifest_digest: &self.baseline_manifest_digest,
             evaluator_executable_digest: &self.evaluator_executable_digest,
             evaluator_input_digest: &self.evaluator_input_digest,
             evaluator_tests_digest: &self.evaluator_tests_digest,
@@ -439,8 +662,12 @@ impl ReplicationPacket {
         digest(&self.identity_payload())
     }
 
-    /// Constructs a packet from exactly two reports and canonicalizes report order.
-    pub fn from_reports(mut reports: Vec<HostReport>) -> Result<Self> {
+    /// Constructs a packet from a frozen request, manifest, and exactly two reports.
+    pub fn from_bundle(
+        request: Request,
+        baseline_manifest: Vec<BaselineManifestEntry>,
+        mut reports: Vec<HostReport>,
+    ) -> Result<Self> {
         if reports.len() != 2 {
             return Err(Error::Rejected(
                 "maintenance replication requires exactly two host reports".into(),
@@ -449,6 +676,10 @@ impl ReplicationPacket {
         for report in &reports {
             report.validate()?;
         }
+        validate_request_binding(&request)?;
+        validate_baseline_manifest(&baseline_manifest)?;
+        let request_digest = digest(&request)?;
+        let baseline_manifest_digest = baseline_manifest_digest(&baseline_manifest)?;
         reports.sort_by(|left, right| left.host_id.cmp(&right.host_id));
         let first = &reports[0];
         let packet = Self {
@@ -457,8 +688,10 @@ impl ReplicationPacket {
             operation: FIXED_OPERATION_IDENTITY.into(),
             process_version: PROCESS_VERSION,
             implementation_revision: first.implementation_revision.clone(),
-            request_digest: first.request_digest.clone(),
-            checkout_baseline_digest: first.checkout_baseline_digest.clone(),
+            toolchain_digest: first.toolchain_digest.clone(),
+            request_digest,
+            checkout_baseline_digest: request.checkout_baseline_digest.clone(),
+            baseline_manifest_digest,
             evaluator_executable_digest: first.evaluator_executable_digest.clone(),
             evaluator_input_digest: first.evaluator_input_digest.clone(),
             evaluator_tests_digest: first.evaluator_tests_digest.clone(),
@@ -466,6 +699,8 @@ impl ReplicationPacket {
             evaluator_public_key: first.evaluator_public_key.clone(),
             evaluator_timeout_ms: first.evaluator_timeout_ms,
             claim_ceiling: first.claim_ceiling.clone(),
+            request,
+            baseline_manifest,
             reports,
             packet_id: String::new(),
         };
@@ -481,8 +716,10 @@ impl ReplicationPacket {
             || self.operation != FIXED_OPERATION_IDENTITY
             || self.process_version != PROCESS_VERSION
             || !valid_revision(&self.implementation_revision)
+            || !valid_digest(&self.toolchain_digest)
             || !valid_digest(&self.request_digest)
             || !valid_digest(&self.checkout_baseline_digest)
+            || !valid_digest(&self.baseline_manifest_digest)
             || !valid_digest(&self.evaluator_executable_digest)
             || self.evaluator_input_digest != fixed_input_digest()
             || self.evaluator_tests_digest != fixed_tests_digest()
@@ -499,6 +736,16 @@ impl ReplicationPacket {
                 "maintenance replication packet shape is invalid".into(),
             ));
         }
+        validate_request_binding(&self.request)?;
+        if digest(&self.request)? != self.request_digest
+            || self.request.checkout_baseline_digest != self.checkout_baseline_digest
+            || baseline_manifest_digest(&self.baseline_manifest)? != self.baseline_manifest_digest
+        {
+            return Err(Error::Rejected(
+                "maintenance replication bundle digest mismatch".into(),
+            ));
+        }
+        validate_baseline_manifest(&self.baseline_manifest)?;
         let mut hosts = BTreeSet::new();
         let mut operators = BTreeSet::new();
         let mut keys = BTreeSet::new();
@@ -509,8 +756,10 @@ impl ReplicationPacket {
                 || report.operation != self.operation
                 || report.process_version != self.process_version
                 || report.implementation_revision != self.implementation_revision
+                || report.toolchain_digest != self.toolchain_digest
                 || report.request_digest != self.request_digest
                 || report.checkout_baseline_digest != self.checkout_baseline_digest
+                || report.baseline_manifest_digest != self.baseline_manifest_digest
                 || report.evaluator_executable_digest != self.evaluator_executable_digest
                 || report.evaluator_input_digest != self.evaluator_input_digest
                 || report.evaluator_tests_digest != self.evaluator_tests_digest
@@ -528,6 +777,22 @@ impl ReplicationPacket {
                     "maintenance replication reports are not independent".into(),
                 ));
             }
+        }
+        let contention_roles = self
+            .reports
+            .iter()
+            .map(|report| scenario_role(report, "cross-state-directory-lock-contention"));
+        let winner_count = contention_roles
+            .clone()
+            .filter(|role| *role == Some(ScenarioRole::Winner))
+            .count();
+        let contender_count = contention_roles
+            .filter(|role| *role == Some(ScenarioRole::Contender))
+            .count();
+        if winner_count != 1 || contender_count != 1 {
+            return Err(Error::Rejected(
+                "maintenance lock contention must have one winner and one contender".into(),
+            ));
         }
         if self.packet_id != self.expected_id()? {
             return Err(Error::Rejected(

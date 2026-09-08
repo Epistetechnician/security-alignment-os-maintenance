@@ -15,6 +15,7 @@ use std::path::PathBuf;
 #[derive(Serialize)]
 struct VerificationOutput<'a> {
     status: &'a str,
+    verdict: &'a str,
     #[serde(skip_serializing_if = "Option::is_none")]
     packet_id: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -46,6 +47,7 @@ fn main() {
         Err(error) => emit(
             VerificationOutput {
                 status: "invalid_local_packet",
+                verdict: "Invalid",
                 packet_id: None,
                 error: Some(format!("packet bytes unavailable: {error}")),
             },
@@ -56,6 +58,7 @@ fn main() {
         Ok(packet) => emit(
             VerificationOutput {
                 status: "valid_local_packet",
+                verdict: "Inconclusive",
                 packet_id: Some(&packet.packet_id),
                 error: None,
             },
@@ -64,6 +67,7 @@ fn main() {
         Err(error) => emit(
             VerificationOutput {
                 status: "invalid_local_packet",
+                verdict: "Invalid",
                 packet_id: None,
                 error: Some(error.to_string()),
             },

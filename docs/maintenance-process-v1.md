@@ -77,9 +77,11 @@ cancellation, path/link, crash, and configuration-substitution cases.
 
 The separate-host replication contract is implemented in
 `maintenance_replication.rs`, with a digest-only
-`maintenance_replication_verifier` entrypoint. Its ten contract tests bind two signed reports
-to the same fixed request, process revision, full-checkout baseline, and exact
-containment/recovery matrix. They are local wire-contract tests; they do not
+`maintenance_replication_verifier` entrypoint. Its 15 contract tests bind two
+signed reports to the same fixed request bytes, full baseline manifest, process
+revision, toolchain digest, and exact 20-scenario containment/recovery matrix.
+The verifier reports `Inconclusive` until external host/operator and evidence
+custody checks are complete. These are local wire-contract tests; they do not
 count as separate-host execution or authenticated operator evidence.
 
 The results establish containment and recovery for the tested local host and

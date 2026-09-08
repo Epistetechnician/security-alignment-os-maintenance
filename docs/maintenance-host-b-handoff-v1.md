@@ -80,12 +80,18 @@ device identity through the approved out-of-band procedure.
 
 ## 2. Obtain the exact source revision
 
-Transfer the source through an approved private channel. A Git bundle is
-acceptable. On Host A, the bundle must be created from the clean checkout at
-the frozen revision. On Host B:
+The reviewed source is public at:
+
+```text
+https://github.com/Epistetechnician/security-alignment-os-maintenance
+```
+
+Clone the repository, then detach at the exact frozen implementation revision.
+Do not run from the branch tip if it has later documentation-only commits:
 
 ```sh
-git clone /private/path/maintenance-188f2f2.bundle /private/path/maintenance-host-b
+git clone https://github.com/Epistetechnician/security-alignment-os-maintenance \
+  /private/path/maintenance-host-b
 cd /private/path/maintenance-host-b
 git checkout --detach 188f2f20652794e1594a0adc6de51b828fa5a966
 git status --short
@@ -93,6 +99,15 @@ git rev-parse HEAD
 ```
 
 The status must be empty and the revision must equal the frozen revision.
+The frozen request and baseline manifest are exchanged separately as the
+Host A bundle. Never commit that bundle, evaluator seed, signing keys, or raw
+evidence to the public repository.
+
+If public source access is unavailable on Host B, use an approved private Git
+transport for the same exact revision and verify the commit out of band.
+
+The public repository is source-only. It does not establish Host B identity,
+operator independence, evaluator custody, or evidence custody.
 
 ## 3. Build and compare the evaluator
 

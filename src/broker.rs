@@ -300,6 +300,8 @@ impl BrokerJournal {
         }
         let mut previous = "0".repeat(64);
         let mut latest = BTreeMap::<String, TransactionStatus>::new();
+        let mut identities = BTreeMap::<String, (String, u64, Option<String>)>::new();
+        let mut replays = BTreeMap::<(String, u64), String>::new();
         for (index, event) in self.entries.iter().enumerate() {
             if event.sequence != index as u64
                 || event.previous_digest != previous
@@ -325,6 +327,25 @@ impl BrokerJournal {
                 || !valid_digest(&event.entry_digest)
             {
                 return Err(Error::Journal("broker journal event is malformed".into()));
+            }
+            let identity = (
+                event.agent_id.clone(),
+                event.nonce,
+                event.destination_relpath.clone(),
+            );
+            if identities
+                .get(&event.request_digest)
+                .is_some_and(|expected| expected != &identity)
+            {
+                return Err(Error::Journal(
+                    "broker journal request identity changed".into(),
+                ));
+            }
+            if replays
+                .get(&(event.agent_id.clone(), event.nonce))
+                .is_some_and(|request_digest| request_digest != &event.request_digest)
+            {
+                return Err(Error::Journal("broker journal agent nonce replay".into()));
             }
             let prior = latest.get(&event.request_digest).copied();
             let allowed = matches!(
@@ -377,6 +398,11 @@ impl BrokerJournal {
             }
             previous = event.entry_digest.clone();
             latest.insert(event.request_digest.clone(), event.status);
+            identities.insert(event.request_digest.clone(), identity);
+            replays.insert(
+                (event.agent_id.clone(), event.nonce),
+                event.request_digest.clone(),
+            );
         }
         Ok(())
     }

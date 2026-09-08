@@ -8,7 +8,7 @@ use security_alignment_os::broker::{
 };
 use security_alignment_os::canonical_bytes;
 use security_alignment_os::receipts::ReceiptSigner;
-use security_alignment_os::{digest_bytes, Evidence, EvidenceRegistry};
+use security_alignment_os::{digest, digest_bytes, Evidence, EvidenceRegistry};
 use std::fs;
 use std::path::Path;
 use std::process::{Child, Command};
@@ -275,7 +275,30 @@ fn broker_process_commits_authorized_transform_and_rejects_replay() {
     security_alignment_os::checker::validate_broker_journal(&committed_journal)
         .expect("independent committed journal check");
     let mut tampered_journal = committed_journal.clone();
-    tampered_journal.entries[0].agent_id.push_str("-tampered");
+    tampered_journal.entries[1].agent_id.push_str("-tampered");
+    for index in 0..tampered_journal.entries.len() {
+        let previous_digest = if index == 0 {
+            "0".repeat(64)
+        } else {
+            tampered_journal.entries[index - 1].entry_digest.clone()
+        };
+        let event = &mut tampered_journal.entries[index];
+        event.previous_digest = previous_digest;
+        let material = (
+            event.sequence,
+            event.previous_digest.clone(),
+            event.request_digest.clone(),
+            event.agent_id.clone(),
+            event.nonce,
+            event.destination_relpath.clone(),
+            event.decision_digest.clone(),
+            event.capability_token_id.clone(),
+            event.status,
+            event.output_digest.clone(),
+        );
+        event.entry_digest = digest(&material).expect("tampered event digest");
+    }
+    assert!(tampered_journal.validate().is_err());
     assert!(security_alignment_os::checker::validate_broker_journal(&tampered_journal).is_err());
     assert_eq!(
         committed_journal.status(

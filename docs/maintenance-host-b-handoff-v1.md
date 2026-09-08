@@ -57,10 +57,11 @@ bundle. Obtain that bundle through an approved private channel and verify its
 SHA-256 against the digest supplied separately by Host A. Do not use a public
 URL, shared paste, or unverified gateway artifact.
 
-Host A bundle:
+Host A bundle on the originating workstation (use the path supplied out of
+band; do not copy this workstation path literally):
 
 ```text
-/Users/shaanp/.local/share/security-alignment-os/maintenance-replication/host-a-20260908-v3/frozen-bundle.json
+<HOST_A_FROZEN_BUNDLE_PATH>
 ```
 
 ## 1. Verify Host B locally

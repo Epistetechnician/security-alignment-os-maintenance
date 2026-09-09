@@ -21,4 +21,8 @@ RUN useradd --uid 1000 --create-home --shell /usr/sbin/nologin replication \
     && install -o replication -g replication -m 0700 /build/target/release/maintenance_confidential_space_runner /opt/maintenance/bin/maintenance_confidential_space_runner
 
 USER replication
+# These are the only operator-controlled launch inputs used by the workload.
+# The launcher rejects metadata overrides unless the image author allows them.
+LABEL "tee.launch_policy.allow_env_override"="IMPLEMENTATION_REVISION"
+LABEL "tee.launch_policy.log_redirect"="always"
 ENTRYPOINT ["/opt/maintenance/bin/maintenance_confidential_space_runner"]

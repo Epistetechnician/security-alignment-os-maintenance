@@ -15,6 +15,7 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 use thiserror::Error;
 
+pub mod adaptation;
 pub mod adapters;
 pub mod alignment;
 pub mod artifacts;

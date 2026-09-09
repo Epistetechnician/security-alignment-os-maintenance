@@ -28,9 +28,11 @@ On aarch64 macOS, the checked-in Cargo target configuration passes `-reproducibl
 to Apple `ld64`. This is part of the evaluator build binding: independent
 operators must build from the same source revision with the approved Rust and
 Apple toolchains, and the evaluator executable bytes must match exactly. The
-`maintenance_reproducibility` integration test performs two clean release
-builds in isolated target directories and rejects any byte or SHA-256 digest
-difference.
+`maintenance_reproducibility` integration test explicitly selects the
+`aarch64-apple-darwin` target on that platform, performs two clean release
+builds in isolated target directories, and rejects any byte or SHA-256 digest
+difference. Other platforms use their native target and do not claim Apple
+linker reproducibility.
 
 keygen is a convenience for single-operator local setup and creates owner-only
 evaluator, host, and operator seed files. `keygen-evaluator` creates only the

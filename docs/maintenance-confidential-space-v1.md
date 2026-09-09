@@ -31,8 +31,11 @@ docker push \
 
 Deploy the immutable image reference to a production Confidential Space image,
 use `SEV` or `TDX` as supported by the selected zone, attach only the workload
-service account, and set `tee-container-log-redirect=cloud_logging` if the
-envelope is being recovered from Cloud Logging. Verify the attestation token
+service account, enable Shielded Secure Boot, and set
+`tee-container-log-redirect=cloud_logging` if the envelope is being recovered
+from Cloud Logging. The production image root is read-only, so the workload's
+ephemeral checkout, keys, and reports are written under `/tmp`, while the
+attestation socket remains under `/run`. Verify the attestation token
 issuer, audience, nonce, `dbgstat=disabled-since-boot`,
 `swname=CONFIDENTIAL_SPACE`, stable support attribute, VM self-link, and exact
 container image digest before accepting the envelope.

@@ -13,7 +13,6 @@ RUN cargo build --release --locked \
     --bin maintenance_confidential_space_runner
 
 RUN useradd --uid 1000 --create-home --shell /usr/sbin/nologin replication \
-    && install -d -o replication -g replication -m 0700 /run/maintenance \
     && install -d -o replication -g replication -m 0700 /opt/maintenance/bin \
     && install -o replication -g replication -m 0700 /build/target/release/maintenance_broker /opt/maintenance/bin/maintenance_broker \
     && install -o replication -g replication -m 0700 /build/target/release/maintenance_evaluator /opt/maintenance/bin/maintenance_evaluator \

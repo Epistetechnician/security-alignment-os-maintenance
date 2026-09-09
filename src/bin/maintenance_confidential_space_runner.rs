@@ -17,10 +17,13 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;
 
-const ROOT: &str = "/run/maintenance";
-const CHECKOUT: &str = "/run/maintenance/checkout";
-const KEYS: &str = "/run/maintenance/keys";
-const ARTIFACTS: &str = "/run/maintenance/artifacts";
+// Confidential Space production workloads run with a read-only image root.
+// Keep only the attestation socket under `/run`; all operation state belongs
+// in the writable ephemeral filesystem.
+const ROOT: &str = "/tmp/maintenance";
+const CHECKOUT: &str = "/tmp/maintenance/checkout";
+const KEYS: &str = "/tmp/maintenance/keys";
+const ARTIFACTS: &str = "/tmp/maintenance/artifacts";
 const ATTESTATION_SOCKET: &str = "/run/container_launcher/teeserver.sock";
 const DEFAULT_AUDIENCE: &str = "https://security-alignment-os.example/machine-attestation/v1";
 
@@ -163,8 +166,8 @@ fn main() {
         let runner = Path::new("/opt/maintenance/bin/maintenance_replication_runner");
         let broker = Path::new("/opt/maintenance/bin/maintenance_broker");
         let evaluator = Path::new("/opt/maintenance/bin/maintenance_evaluator");
-        let bundle = Path::new("/run/maintenance/frozen-bundle.json");
-        let spec = Path::new("/run/maintenance/runner-spec.json");
+        let bundle = Path::new(ROOT).join("frozen-bundle.json");
+        let spec = Path::new(ROOT).join("runner-spec.json");
         run(runner, &["keygen", KEYS])?;
         run(
             runner,

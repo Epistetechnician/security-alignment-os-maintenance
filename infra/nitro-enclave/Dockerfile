@@ -3,6 +3,8 @@
 FROM rust:1.87-bookworm
 
 WORKDIR /build
+ARG IMPLEMENTATION_REVISION
+ENV IMPLEMENTATION_REVISION=${IMPLEMENTATION_REVISION}
 COPY Cargo.toml Cargo.lock ./
 COPY src ./src
 RUN cargo build --release --locked \

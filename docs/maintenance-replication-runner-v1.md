@@ -11,7 +11,8 @@ host or operator identity, or raise the claim ceiling beyond local evidence.
 
 ## Workflow
 
-Build the binaries, then provision an operator-owned private checkout containing
+Build the binaries with the repository's reproducible Apple linker setting, then
+provision an operator-owned private checkout containing
 the fixed Markdown operation. The following commands use absolute paths:
 
 ~~~text
@@ -22,6 +23,14 @@ maintenance_replication_runner init CHECKOUT ARTIFACT_DIR BROKER EVALUATOR EVALU
 maintenance_replication_runner report SPEC_OUTPUT
 maintenance_replication_runner packet FROZEN_BUNDLE REPORT_A REPORT_B PACKET_OUTPUT
 ~~~
+
+On aarch64 macOS, the checked-in Cargo target configuration passes `-reproducible`
+to Apple `ld64`. This is part of the evaluator build binding: independent
+operators must build from the same source revision with the approved Rust and
+Apple toolchains, and the evaluator executable bytes must match exactly. The
+`maintenance_reproducibility` integration test performs two clean release
+builds in isolated target directories and rejects any byte or SHA-256 digest
+difference.
 
 keygen is a convenience for single-operator local setup and creates owner-only
 evaluator, host, and operator seed files. `keygen-evaluator` creates only the

@@ -1,0 +1,16 @@
+# State slice: security-alignment-os-foundation-v1.
+# Build the Confidential Space image from the repository root while keeping
+# the workload Dockerfile under the infrastructure boundary.
+steps:
+  - name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - --file=infra/confidential-space/Dockerfile
+      - --tag=${_IMAGE}
+      - .
+images:
+  - ${_IMAGE}
+substitutions:
+  _IMAGE: us-west1-docker.pkg.dev/secops1219/maintenance-attested/maintenance-runner:local
+options:
+  logging: CLOUD_LOGGING_ONLY

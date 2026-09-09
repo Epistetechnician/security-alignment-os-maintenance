@@ -22,6 +22,10 @@ must match the anchor, and its execution-authority bit must remain false.
 priority, then immutable-base digest, then candidate digest. The resulting
 `AdaptationPlan` is proposal-only and cannot authorize deployment.
 
+`AdaptationPlan::stage_shadow` can pass the exactly bound candidate to the
+existing governance registry. It creates only a `Shadow` record; a different
+candidate is rejected, and no deployment or execution authority is created.
+
 `adaptation::select_work_offer` validates offers against the exact plan and
 selects by price, provider, and offer ID. Duplicate eligible offer identities
 quarantine the selection. The function produces no settlement record and does

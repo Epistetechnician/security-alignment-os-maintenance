@@ -7,7 +7,7 @@
 //! authorize execution, promote a candidate, or settle a price. Inconclusive
 //! evidence produces `NoCandidate` rather than a proxy acceptance.
 
-use crate::governance::CandidateUpdate;
+use crate::governance::{CandidateUpdate, ReleaseRegistry};
 use crate::{digest, valid_digest, Error, Result, CLAIM_CEILING};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
@@ -146,6 +146,22 @@ impl AdaptationPlan {
     pub fn digest(&self) -> Result<String> {
         self.validate()?;
         digest(self)
+    }
+
+    /// Records the bound candidate in governance shadow state only.
+    pub fn stage_shadow(
+        &self,
+        candidate: &AdaptationCandidate,
+        registry: &mut ReleaseRegistry,
+    ) -> Result<()> {
+        self.validate()?;
+        candidate.validate()?;
+        if candidate.digest()? != self.candidate_digest {
+            return Err(Error::Rejected(
+                "shadow candidate does not match adaptation plan".into(),
+            ));
+        }
+        registry.propose(candidate.candidate.clone())
     }
 }
 

@@ -51,6 +51,38 @@ fn rejected(message: impl Into<String>) -> Error {
     Error::Rejected(message.into())
 }
 
+fn decode_chunked_body(body: &[u8]) -> Result<Vec<u8>> {
+    let mut decoded = Vec::new();
+    let mut cursor = 0;
+    loop {
+        let line_end = body[cursor..]
+            .windows(2)
+            .position(|window| window == b"\r\n")
+            .ok_or_else(|| rejected("attestation chunk has no size boundary"))?
+            + cursor;
+        let size_text = std::str::from_utf8(&body[cursor..line_end])
+            .map_err(|_| rejected("attestation chunk size is not UTF-8"))?
+            .split(';')
+            .next()
+            .unwrap_or_default()
+            .trim();
+        let size = usize::from_str_radix(size_text, 16)
+            .map_err(|_| rejected("attestation chunk size is not hexadecimal"))?;
+        cursor = line_end + 2;
+        if size == 0 {
+            return Ok(decoded);
+        }
+        let end = cursor
+            .checked_add(size)
+            .ok_or_else(|| rejected("attestation chunk size overflows"))?;
+        if end + 2 > body.len() || &body[end..end + 2] != b"\r\n" {
+            return Err(rejected("attestation chunk has an invalid terminator"));
+        }
+        decoded.extend_from_slice(&body[cursor..end]);
+        cursor = end + 2;
+    }
+}
+
 fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
@@ -88,7 +120,15 @@ fn request_attestation(audience: &str, nonce: &str) -> Result<String> {
         return Err(rejected(format!("attestation request failed: {headers}")));
     }
     let body = &response[header_end + 4..];
-    let body_text = std::str::from_utf8(body)
+    let body = if headers
+        .to_ascii_lowercase()
+        .contains("transfer-encoding: chunked")
+    {
+        decode_chunked_body(body)?
+    } else {
+        body.to_vec()
+    };
+    let body_text = std::str::from_utf8(&body)
         .map_err(|_| rejected("attestation response body is not UTF-8"))?
         .trim();
     if body_text.is_empty() {
@@ -131,13 +171,18 @@ fn write_private(path: &Path, bytes: &[u8]) -> Result<()> {
     Ok(())
 }
 
-fn create_checkout() -> Result<()> {
-    fs::create_dir_all(CHECKOUT)?;
+fn create_private_dir(path: &Path) -> Result<()> {
+    fs::create_dir_all(path)?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(CHECKOUT, fs::Permissions::from_mode(0o700))?;
+        fs::set_permissions(path, fs::Permissions::from_mode(0o700))?;
     }
+    Ok(())
+}
+
+fn create_checkout() -> Result<()> {
+    create_private_dir(Path::new(CHECKOUT))?;
     write_private(
         &PathBuf::from(CHECKOUT).join("README.md"),
         b"# Replication  \nDocumentation.   \n",
@@ -158,9 +203,9 @@ fn main() {
         let nonce = random_nonce()?;
         let token = request_attestation(&audience, &nonce)?;
 
-        fs::create_dir_all(ROOT)?;
-        fs::create_dir_all(KEYS)?;
-        fs::create_dir_all(ARTIFACTS)?;
+        create_private_dir(Path::new(ROOT))?;
+        create_private_dir(Path::new(KEYS))?;
+        create_private_dir(Path::new(ARTIFACTS))?;
         create_checkout()?;
 
         let runner = Path::new("/opt/maintenance/bin/maintenance_replication_runner");
@@ -238,5 +283,18 @@ fn main() {
     if let Err(error) = result {
         eprintln!("machine-attested maintenance runner error: {error}");
         std::process::exit(1);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::decode_chunked_body;
+
+    #[test]
+    fn decodes_attestation_chunked_body() {
+        assert_eq!(
+            decode_chunked_body(b"4;ext=value\r\natte\r\n5\r\nstate\r\n0\r\n\r\n").unwrap(),
+            b"attestate"
+        );
     }
 }

@@ -9,23 +9,36 @@ use std::process::Command;
 use tempfile::tempdir;
 
 fn build_evaluator(target_dir: &Path) -> Vec<u8> {
+    let mut args = vec![
+        "build",
+        "--locked",
+        "--release",
+        "--bin",
+        "maintenance_evaluator",
+        "--quiet",
+    ];
+    if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
+        // Exercise the checked-in target-specific Apple linker flags instead
+        // of silently building the host target without that configuration.
+        args.splice(1..1, ["--target", "aarch64-apple-darwin"]);
+    }
     let status = Command::new("cargo")
         .current_dir(env!("CARGO_MANIFEST_DIR"))
         .env("CARGO_TARGET_DIR", target_dir)
         .env("CARGO_INCREMENTAL", "0")
-        .args([
-            "build",
-            "--locked",
-            "--release",
-            "--bin",
-            "maintenance_evaluator",
-            "--quiet",
-        ])
+        .args(args)
         .status()
         .expect("cargo release build should start");
     assert!(status.success(), "cargo release build failed: {status}");
 
-    let executable = target_dir.join("release").join("maintenance_evaluator");
+    let executable = if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
+        target_dir
+            .join("aarch64-apple-darwin")
+            .join("release")
+            .join("maintenance_evaluator")
+    } else {
+        target_dir.join("release").join("maintenance_evaluator")
+    };
     fs::read(executable).expect("release evaluator should exist")
 }
 

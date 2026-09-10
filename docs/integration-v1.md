@@ -155,7 +155,8 @@ process boundary into the evidence plane. It requires a caller-pinned broker
 issuer key, recomputes the request and decision digests, checks live evidence
 and its exact record digest, independently validates both signed receipts,
 resolves the source and destination through the broker workspace path guard,
-and recomputes the uppercase transformation and output digest. It returns
+and recomputes the fixed Markdown trailing-space transformation and output
+digest. It returns
 digest-only completion metadata and does not recreate or mutate local kernel,
 runtime, or capability state. A forged output, wrong issuer, revoked evidence,
 stale source, or noncanonical response is rejected.

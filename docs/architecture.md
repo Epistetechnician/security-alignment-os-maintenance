@@ -52,5 +52,7 @@ claim ceiling before execution.
 
 See [integration-v1.md](integration-v1.md) for specialist persistence,
 observations, rollback and downstream local release/compute contracts.
+See [replication-v1.md](replication-v1.md), [adaptation-v1.md](adaptation-v1.md),
+and [causal-v1.md](causal-v1.md) for the bounded later-phase records.
 See [plan-conformance-v1.md](plan-conformance-v1.md) for the phase gates and
 remaining external enforcement work.

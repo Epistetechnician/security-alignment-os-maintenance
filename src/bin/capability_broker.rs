@@ -52,6 +52,11 @@ fn main() {
         supervisor_path: values[4].clone(),
         kill_after_executing: env::var_os("BROKER_KILL_AFTER_EXECUTING").is_some_and(|v| v == "1"),
         kill_after_rename: env::var_os("BROKER_KILL_AFTER_RENAME").is_some_and(|v| v == "1"),
+        cancel_after_rename: env::var_os("BROKER_CANCEL_AFTER_RENAME").is_some_and(|v| v == "1"),
+        cancel_after_evaluation: env::var_os("BROKER_CANCEL_AFTER_EVALUATION")
+            .is_some_and(|v| v == "1"),
+        cancel_before_replacement: env::var_os("BROKER_CANCEL_BEFORE_REPLACEMENT")
+            .is_some_and(|v| v == "1"),
     };
     let broker = match Broker::new(config, evidence, signer) {
         Ok(value) => value,

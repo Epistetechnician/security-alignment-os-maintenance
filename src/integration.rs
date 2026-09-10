@@ -6,7 +6,7 @@
 //! are caller-supplied assertions; this module does not inspect a process,
 //! model, provider, network, or host security boundary.
 
-use crate::broker::{self, BrokerResponse, FileTransformOperation, TRANSFORMER_ID};
+use crate::broker::{self, BrokerResponse, TRANSFORMER_ID};
 use crate::receipts::{CapabilityReceipt, ReceiptVerifier};
 use crate::{
     artifacts::ArtifactRegistry, checker, contract, digest, digest_bytes, DecisionKind,
@@ -146,12 +146,7 @@ pub fn accept_broker_completion(
             "broker completion output exceeds quota".into(),
         ));
     }
-    let expected_output = match request.operation {
-        FileTransformOperation::UppercaseAscii => source_bytes
-            .iter()
-            .map(|byte| byte.to_ascii_uppercase())
-            .collect::<Vec<_>>(),
-    };
+    let expected_output = broker::transform_output(request.operation, &source_bytes)?;
     let output_digest = digest_bytes(&output);
     if output != expected_output
         || output_digest != *response_output_digest

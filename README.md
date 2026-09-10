@@ -56,7 +56,7 @@ JavaScript runtime dependencies are installed.
 | `property` | Exhaustive local lattice/lifecycle checks and digest-only invariant reports |
 | `receipts` | Ed25519-signed capability and post-validation execution receipts with exact binding and local replay rejection |
 | `execution_gate` | Typed sandbox/request boundary that validates controls and remains blocked locally |
-| `broker`, `capability_broker`, `capability_supervisor` | Separate Unix IPC broker, broker-only receipt issuer, staged uppercase file transformation, canonical journal, timeout/kill path, network-denied host sandbox, and frozen crash recovery |
+| `broker`, `capability_broker`, `capability_supervisor` | Separate Unix IPC broker, broker-only receipt issuer, staged root-level Markdown trailing-space transformation, canonical journal, timeout/cancellation kill paths, network-denied host sandbox, and frozen crash recovery |
 | `broker_adversarial_runner` | Separate hostile client for direct supervisor, path escape, replay, forged receipt, malformed child operation, and telemetry containment attempts |
 | `schema` | Versioned schema identities with exact digest-bound lookup and canonical recovery |
 | `Runtime`, `AuditJournal` | Reversible dictionary actions, terminal freeze/kill, and digest-chained audit persistence |
@@ -65,6 +65,9 @@ JavaScript runtime dependencies are installed.
 | `integration` | Evidence-bound workflow execution, receipt-gated execution, broker completion acceptance with pinned identity and output recomputation, lifecycle completion/quarantine, observation, rollback, freeze, and kill disposition |
 | `market` | Fixed local sum with job/input commitments, typed exact-offer receipts, result recomputation, binding/timeout/replay checks, and an authorization-required settlement proposal |
 | `governance` | Shadow/canary/local-release records with immutable base, phase evidence, lifecycle validation, and canonical persistence/recovery |
+| `replication` | Frozen digest-only replication packets, independently signed operator results, exact comparison, mismatch quarantine, and canonical recovery |
+| `adaptation` | Immutable-base shadow/canary controls, evaluator/policy/resource/prediction-lock binding, independent promotion, rollback, and terminal freeze |
+| `causal` | Preregistered causal-track identity, qualification-before-assessment ordering, held-out/prediction-lock binding, independent acceptance, and raw-trace exclusion |
 | `faults` | Deterministic replay, stale-clock, stale-policy, malformed-bytes, partial-write, and kill/freeze scenarios |
 
 ## Boundaries
@@ -102,6 +105,9 @@ satisfy those gates.
 - [Schema registry](docs/schema-v1.md)
 - [Fault injection](docs/fault-injection-v1.md)
 - [Plan conformance](docs/plan-conformance-v1.md)
+- [Independent replication](docs/replication-v1.md)
+- [Controlled adaptation](docs/adaptation-v1.md)
+- [Causal protocol](docs/causal-v1.md)
 - [Runtime and specialist](docs/runtime-v1.md)
 - [Rust port status](docs/rust-port-v1.md)
 - [Source intake](docs/source-intake-v1.json)

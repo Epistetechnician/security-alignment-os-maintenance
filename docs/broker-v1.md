@@ -11,9 +11,11 @@ inside the broker process and is never accepted from or returned to the
 client. The client receives only the public issuer key in `Hello` and the
 receipt after admission.
 
-The only operation is `UppercaseAscii` over one regular source file in the
-canonical broker workspace. Source and destination paths must be relative,
-contain only normal path components, and remain inside the workspace. The
+The only operation is `TrimTrailingAsciiSpaces` over one unlinked regular
+root-level `.md` source and destination file in the canonical broker workspace.
+Paths must be relative, contain only normal path components, and remain inside
+the workspace. The evaluator removes ASCII spaces immediately before LF or
+CRLF line endings and at EOF while preserving tabs and all other bytes. The
 source digest, byte quota, executable digest, scope, request nonce, and
 expiry are bound into the proposal and transaction records. Network and
 ambient environment variables are denied to the supervisor. The supervisor
@@ -39,12 +41,21 @@ can observe containment. The independent checker replays the hash chain,
 transaction transitions, request identity continuity, and agent/nonce replay
 constraints from the persisted bytes.
 
+The broker binds the configured Unix socket before serving. A second broker
+using the same socket is rejected as an occupied state lock; a socket left by
+a crashed broker is removed only after a live connection check fails. This
+serializes writers for one configured checkout while retaining explicit
+same-UID and compromised-host nonclaims.
+
 The supervisor writes a create-new staging file, syncs it, rechecks the source
 digest and destination absence, and atomically renames the staged bytes. The
 broker independently rechecks the original source and committed output. A
-timeout, failed supervisor, changed source, invalid output, or journal failure
-removes the destination when possible, records rollback, and freezes further
-admission. On macOS the backend uses `/usr/bin/sandbox-exec` with network and
+timeout, cancellation, failed supervisor, changed source, invalid output, or
+journal failure removes the destination when possible, records rollback, and
+freezes further admission. Cancellation checkpoints cover admission, completed
+evaluation, pre-replacement staging, and post-replacement handling. On macOS
+the backend uses `/usr/bin/sandbox-exec`
+with network and
 file-write denial plus an exact supervisor executable allowance. On Linux it
 uses an unprivileged user, network, and PID namespace through `unshare`; if
 that primitive is unavailable the request fails closed. The Linux invocation

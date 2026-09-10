@@ -17,8 +17,9 @@ valid request in this slice. `schema::SchemaRegistry` binds each versioned
 schema identity to one exact digest and rejects missing or mismatched records.
 
 The broker lane adds one explicit process boundary without changing those
-same-process interfaces. `broker::Broker` accepts only a typed uppercase file
-transformation over Unix IPC, binds the exact supervisor executable, input,
+same-process interfaces. `broker::Broker` accepts only a typed root-level
+Markdown trailing-space transformation over Unix IPC, binds the exact
+supervisor executable, input,
 workspace, quota, expiry, evidence ID, and nonce, and keeps receipt signing
 keys in the broker process. `capability_supervisor` is a separate executable
 with a broker-only launch token, host sandbox backend, staged atomic commit,

@@ -7,8 +7,8 @@
 //! missing telemetry containment.
 
 use security_alignment_os::broker::{
-    BrokerClient, BrokerRequest, BrokerResponse, FileTransformRequest, SupervisorJob,
-    MAX_FRAME_BYTES,
+    transform_output, BrokerClient, BrokerRequest, BrokerResponse, FileTransformRequest,
+    SupervisorJob, MAX_FRAME_BYTES,
 };
 use security_alignment_os::receipts::ReceiptVerifier;
 use security_alignment_os::{canonical_bytes, digest_bytes};
@@ -46,7 +46,10 @@ fn expect_direct_supervisor_rejected(
         Ok(value) => value,
         Err(_) => return false,
     };
-    let output: Vec<u8> = input.iter().map(|byte| byte.to_ascii_uppercase()).collect();
+    let output = match transform_output(request.operation, &input) {
+        Ok(value) => value,
+        Err(_) => return false,
+    };
     let workspace = match fs::canonicalize(workspace) {
         Ok(value) => value,
         Err(_) => return false,
@@ -56,6 +59,8 @@ fn expect_direct_supervisor_rejected(
         workspace: workspace.clone(),
         expected_output_digest: digest_bytes(&output),
         launch_token_digest: "0".repeat(64),
+        cancel_after_evaluation: false,
+        cancel_before_replacement: false,
     };
     let path = workspace.join(".adversarial-direct-job.json");
     let bytes = match canonical_bytes(&job) {

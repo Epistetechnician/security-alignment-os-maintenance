@@ -48,6 +48,61 @@
       "working_bytes_sha256": "1b053d549efd2483bd06a8687ebf6bfa80dd10e430e1b34caf062b9c3c288dff",
       "license_status": "MIT",
       "treatment": "Architecture and API reference; no code or scientific artifacts copied"
+    },
+    {
+      "repository": "hyperIntel",
+      "path": "crates/hyperintel-execution-journal/src/lib.rs",
+      "head": "d52111a07baa5fc4a7f6bfb4407731e2b9f609dc",
+      "working_bytes_sha256": "44d0e068a0f83bc52568e2323bb9162282271b20193966bc3394903ee5bf8476",
+      "license_status": "No repository license located; committed object only",
+      "treatment": "Durable attempt, terminal classification, and fail-closed recovery pattern consulted; no code copied"
+    },
+    {
+      "repository": "hyperIntel",
+      "path": "crates/hyperintel-core/src/canonical.rs",
+      "head": "d52111a07baa5fc4a7f6bfb4407731e2b9f609dc",
+      "working_bytes_sha256": "1e770cd2d2681b5b69430f5945e45c550a3fdf73d879cf3a0ce671a1f4923ce7",
+      "license_status": "No repository license located; committed object only",
+      "treatment": "Canonical identity and digest-bound record pattern consulted; no code copied"
+    },
+    {
+      "repository": "hyperAI",
+      "path": "crates/outcomes-evidence/src/lib.rs",
+      "head": "dcf41e31aa1f98438a6f8ec6cb253801e26dc0aa",
+      "working_bytes_sha256": "a8b99a4d5bf30e2b7ff6432a4ddb147cf7312a68398be2bbbb8b80833a2875e1",
+      "license_status": "No repository license located; committed object only",
+      "treatment": "Offline evidence verification and signature-binding pattern consulted; outcome schemas and code were not copied"
+    },
+    {
+      "repository": "hyperAI",
+      "path": "crates/outcomes-domain/src/canonical.rs",
+      "head": "dcf41e31aa1f98438a6f8ec6cb253801e26dc0aa",
+      "working_bytes_sha256": "971d5b456fe0d1be10526b2bd5038247246491e4ab7a52ea74f6b8c0f9c7d927",
+      "license_status": "No repository license located; committed object only",
+      "treatment": "Canonical JSON validation and domain-separated digest design consulted; no code copied"
+    },
+    {
+      "repository": "hyperAI",
+      "path": "crates/outcomes-domain/src/identifiers.rs",
+      "head": "dcf41e31aa1f98438a6f8ec6cb253801e26dc0aa",
+      "working_bytes_sha256": "9a3ddac3fdd23d4f4540cefbec1a5ae7f92e94ea7e12a99792590ee7f11626fc",
+      "license_status": "No repository license located; committed object only",
+      "treatment": "Strict digest identifier representation consulted; no code copied"
+    },
+    {
+      "repository": "hyperAI",
+      "path": "crates/outcomes-domain/src/timestamp.rs",
+      "head": "dcf41e31aa1f98438a6f8ec6cb253801e26dc0aa",
+      "working_bytes_sha256": "c167e21a81968cb8d08b5aa1a0086ddba47e68a788f07dfff59d62fea72a1fef",
+      "license_status": "No repository license located; committed object only",
+      "treatment": "Whole-second time-boundary pattern consulted; no code copied"
+    }
+  ],
+  "unavailable_sources": [
+    {
+      "repository": "hypersacredai",
+      "path": "/Users/shaanp/Documents/GitHub/hypersacredai",
+      "status": "checkout not present locally; no source inspected or copied"
     }
   ],
   "external_references": [

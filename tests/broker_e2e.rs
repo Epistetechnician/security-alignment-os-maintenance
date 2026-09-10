@@ -26,13 +26,21 @@ fn timestamp() -> u64 {
 #[test]
 fn crash_recovery_freezes_in_flight_transaction_without_recreating_authority() {
     let directory = tempfile::tempdir().expect("tempdir");
-    let source = directory.path().join("source.txt");
+    let source = directory.path().join("source.md");
     let input = b"Crash-safe broker\n";
     fs::write(&source, input).expect("source");
     let supervisor = Path::new(env!("CARGO_BIN_EXE_capability_supervisor"));
     let authorized = request(supervisor, input, 11, true);
     let registry = registry_for(std::slice::from_ref(&authorized));
-    let (mut crashed, client) = start_broker(&directory, &registry, supervisor, true, false);
+    let (mut crashed, client) = start_broker(
+        &directory,
+        &registry,
+        supervisor,
+        BrokerTestControls {
+            kill_after_executing: true,
+            ..Default::default()
+        },
+    );
     let result = client.request(BrokerRequest::Execute(Box::new(authorized.clone())));
     assert!(result.is_err(), "injected crash must sever IPC");
     let _ = crashed.wait();
@@ -50,10 +58,14 @@ fn crash_recovery_freezes_in_flight_transaction_without_recreating_authority() {
         Some(TransactionStatus::Executing)
     );
     assert_eq!(fs::read(&source).expect("source read"), input);
-    assert!(!directory.path().join("output-11.txt").exists());
+    assert!(!directory.path().join("output-11.md").exists());
 
-    let (mut recovered, recovery_client) =
-        start_broker(&directory, &registry, supervisor, false, false);
+    let (mut recovered, recovery_client) = start_broker(
+        &directory,
+        &registry,
+        supervisor,
+        BrokerTestControls::default(),
+    );
     let recovered_journal = BrokerJournal::load(&journal_path).expect("recovered journal");
     security_alignment_os::checker::validate_broker_journal(&recovered_journal)
         .expect("independent recovered journal check");
@@ -66,7 +78,7 @@ fn crash_recovery_freezes_in_flight_transaction_without_recreating_authority() {
         other => panic!("unexpected recovery response: {other:?}"),
     }
     assert_eq!(fs::read(&source).expect("source read"), input);
-    assert!(!directory.path().join("output-11.txt").exists());
+    assert!(!directory.path().join("output-11.md").exists());
     let _ = recovered.kill();
     let _ = recovered.wait();
 }
@@ -74,17 +86,25 @@ fn crash_recovery_freezes_in_flight_transaction_without_recreating_authority() {
 #[test]
 fn post_rename_crash_recovery_removes_uncommitted_destination() {
     let directory = tempfile::tempdir().expect("tempdir");
-    let source = directory.path().join("source.txt");
+    let source = directory.path().join("source.md");
     let input = b"Post-rename crash\n";
     fs::write(&source, input).expect("source");
     let supervisor = Path::new(env!("CARGO_BIN_EXE_capability_supervisor"));
     let authorized = request(supervisor, input, 12, true);
     let registry = registry_for(std::slice::from_ref(&authorized));
-    let (mut crashed, client) = start_broker(&directory, &registry, supervisor, false, true);
+    let (mut crashed, client) = start_broker(
+        &directory,
+        &registry,
+        supervisor,
+        BrokerTestControls {
+            kill_after_rename: true,
+            ..Default::default()
+        },
+    );
     let result = client.request(BrokerRequest::Execute(Box::new(authorized.clone())));
     assert!(result.is_err(), "injected post-rename crash must sever IPC");
     let _ = crashed.wait();
-    let destination = directory.path().join("output-12.txt");
+    let destination = directory.path().join("output-12.md");
     assert!(
         destination.exists(),
         "fault must occur after supervisor rename"
@@ -103,8 +123,12 @@ fn post_rename_crash_recovery_removes_uncommitted_destination() {
         Some(TransactionStatus::Executing)
     );
 
-    let (mut recovered, recovery_client) =
-        start_broker(&directory, &registry, supervisor, false, false);
+    let (mut recovered, recovery_client) = start_broker(
+        &directory,
+        &registry,
+        supervisor,
+        BrokerTestControls::default(),
+    );
     let recovered_journal = BrokerJournal::load(&journal_path).expect("recovered journal");
     security_alignment_os::checker::validate_broker_journal(&recovered_journal)
         .expect("independent recovered journal check");
@@ -133,9 +157,9 @@ fn request(
         agent_id: "agent-test".into(),
         subject: "tenant-test".into(),
         evidence_id: format!("evidence-{nonce}"),
-        operation: FileTransformOperation::UppercaseAscii,
-        source_relpath: "source.txt".into(),
-        destination_relpath: format!("output-{nonce}.txt"),
+        operation: FileTransformOperation::TrimTrailingAsciiSpaces,
+        source_relpath: "source.md".into(),
+        destination_relpath: format!("output-{nonce}.md"),
         input_digest: digest_bytes(input),
         executable_digest: executable_digest(supervisor).expect("supervisor digest"),
         max_bytes: 1_000,
@@ -143,6 +167,7 @@ fn request(
         requested_at: now.saturating_sub(1),
         expires_at: now + 20,
         nonce,
+        cancel_requested: false,
         telemetry_present,
     }
 }
@@ -167,12 +192,20 @@ fn registry_for(requests: &[FileTransformRequest]) -> EvidenceRegistry {
     registry
 }
 
+#[derive(Clone, Copy, Default)]
+struct BrokerTestControls {
+    kill_after_executing: bool,
+    kill_after_rename: bool,
+    cancel_after_rename: bool,
+    cancel_after_evaluation: bool,
+    cancel_before_replacement: bool,
+}
+
 fn start_broker(
     directory: &TempDir,
     registry: &EvidenceRegistry,
     supervisor: &Path,
-    kill_after_executing: bool,
-    kill_after_rename: bool,
+    controls: BrokerTestControls,
 ) -> (Child, BrokerClient) {
     let socket = directory.path().join("broker.sock");
     let journal = directory.path().join("journal.json");
@@ -195,11 +228,20 @@ fn start_broker(
         supervisor.as_os_str(),
         seed_path.as_os_str(),
     ]);
-    if kill_after_executing {
+    if controls.kill_after_executing {
         command.env("BROKER_KILL_AFTER_EXECUTING", "1");
     }
-    if kill_after_rename {
+    if controls.kill_after_rename {
         command.env("BROKER_KILL_AFTER_RENAME", "1");
+    }
+    if controls.cancel_after_rename {
+        command.env("BROKER_CANCEL_AFTER_RENAME", "1");
+    }
+    if controls.cancel_after_evaluation {
+        command.env("BROKER_CANCEL_AFTER_EVALUATION", "1");
+    }
+    if controls.cancel_before_replacement {
+        command.env("BROKER_CANCEL_BEFORE_REPLACEMENT", "1");
     }
     let child = command.spawn().expect("broker spawn");
     let client = BrokerClient::new(socket);
@@ -218,8 +260,8 @@ fn start_broker(
 #[test]
 fn broker_process_commits_authorized_transform_and_rejects_replay() {
     let directory = tempfile::tempdir().expect("tempdir");
-    let source = directory.path().join("source.txt");
-    let input = b"Hello broker\n";
+    let source = directory.path().join("source.md");
+    let input = b"Hello broker  \n";
     fs::write(&source, input).expect("source");
     let supervisor = Path::new(env!("CARGO_BIN_EXE_capability_supervisor"));
     let authorized = request(supervisor, input, 1, true);
@@ -242,7 +284,12 @@ fn broker_process_commits_authorized_transform_and_rejects_replay() {
         escaped.clone(),
         missing_telemetry.clone(),
     ]);
-    let (mut child, client) = start_broker(&directory, &registry, supervisor, false, false);
+    let (mut child, client) = start_broker(
+        &directory,
+        &registry,
+        supervisor,
+        BrokerTestControls::default(),
+    );
     let response = client
         .request(BrokerRequest::Execute(Box::new(authorized.clone())))
         .expect("execute");
@@ -267,8 +314,8 @@ fn broker_process_commits_authorized_transform_and_rejects_replay() {
         };
     assert_eq!(fs::read(&source).expect("source read"), input);
     assert_eq!(
-        fs::read(directory.path().join("output-1.txt")).expect("output"),
-        b"HELLO BROKER\n"
+        fs::read(directory.path().join("output-1.md")).expect("output"),
+        b"Hello broker\n"
     );
     let committed_journal =
         BrokerJournal::load(&directory.path().join("journal.json")).expect("committed journal");
@@ -372,7 +419,7 @@ fn broker_process_commits_authorized_transform_and_rejects_replay() {
     )
     .expect("broker completion acceptance");
     assert_eq!(accepted.request_digest, decision.candidate_digest);
-    assert_eq!(accepted.output_digest, digest_bytes(b"HELLO BROKER\n"));
+    assert_eq!(accepted.output_digest, digest_bytes(b"Hello broker\n"));
     let forged_output = match response.clone() {
         BrokerResponse::Completed {
             request_digest,
@@ -460,13 +507,18 @@ fn broker_process_commits_authorized_transform_and_rejects_replay() {
 #[test]
 fn adversarial_runner_contains_direct_and_malformed_attempts() {
     let directory = tempfile::tempdir().expect("tempdir");
-    let source = directory.path().join("source.txt");
+    let source = directory.path().join("source.md");
     let input = b"Adversarial runner\n";
     fs::write(&source, input).expect("source");
     let supervisor = Path::new(env!("CARGO_BIN_EXE_capability_supervisor"));
     let authorized = request(supervisor, input, 21, true);
     let registry = registry_for(std::slice::from_ref(&authorized));
-    let (mut broker, client) = start_broker(&directory, &registry, supervisor, false, false);
+    let (mut broker, client) = start_broker(
+        &directory,
+        &registry,
+        supervisor,
+        BrokerTestControls::default(),
+    );
     let request_path = directory.path().join("request.json");
     fs::write(
         &request_path,
@@ -484,6 +536,162 @@ fn adversarial_runner_contains_direct_and_malformed_attempts() {
         .expect("runner spawn");
     assert!(status.success());
     assert_eq!(fs::read(&source).expect("source read"), input);
+    let _ = broker.kill();
+    let _ = broker.wait();
+}
+
+#[test]
+fn cancellation_before_admission_preserves_workspace() {
+    let directory = tempfile::tempdir().expect("tempdir");
+    let source = directory.path().join("source.md");
+    let input = b"cancel before  \n";
+    fs::write(&source, input).expect("source");
+    let supervisor = Path::new(env!("CARGO_BIN_EXE_capability_supervisor"));
+    let mut cancelled = request(supervisor, input, 31, true);
+    cancelled.cancel_requested = true;
+    let registry = registry_for(std::slice::from_ref(&cancelled));
+    let (mut broker, client) = start_broker(
+        &directory,
+        &registry,
+        supervisor,
+        BrokerTestControls::default(),
+    );
+    match client.request(BrokerRequest::Execute(Box::new(cancelled))) {
+        Ok(BrokerResponse::Rejected { code, .. }) => {
+            assert_eq!(code, "cancelled_before_admission")
+        }
+        other => panic!("unexpected cancellation response: {other:?}"),
+    }
+    assert_eq!(fs::read(&source).expect("source"), input);
+    assert!(!directory.path().join("output-31.md").exists());
+    let _ = broker.kill();
+    let _ = broker.wait();
+}
+
+#[test]
+fn cancellation_after_replacement_rolls_back_and_freezes() {
+    let directory = tempfile::tempdir().expect("tempdir");
+    let source = directory.path().join("source.md");
+    let input = b"cancel after  \n";
+    fs::write(&source, input).expect("source");
+    let supervisor = Path::new(env!("CARGO_BIN_EXE_capability_supervisor"));
+    let authorized = request(supervisor, input, 32, true);
+    let registry = registry_for(std::slice::from_ref(&authorized));
+    let (mut broker, client) = start_broker(
+        &directory,
+        &registry,
+        supervisor,
+        BrokerTestControls {
+            cancel_after_rename: true,
+            ..Default::default()
+        },
+    );
+    match client.request(BrokerRequest::Execute(Box::new(authorized.clone()))) {
+        Ok(BrokerResponse::Quarantined { code, .. }) => {
+            assert_eq!(code, "cancelled_after_replacement")
+        }
+        other => panic!("unexpected cancellation response: {other:?}"),
+    }
+    let journal = BrokerJournal::load(&directory.path().join("journal.json")).expect("journal");
+    let request_digest = authorized
+        .to_proposal()
+        .expect("proposal")
+        .digest()
+        .expect("digest");
+    assert_eq!(
+        journal.status(&request_digest),
+        Some(TransactionStatus::RolledBack)
+    );
+    assert_eq!(fs::read(&source).expect("source"), input);
+    assert!(!directory.path().join("output-32.md").exists());
+    match client.request(BrokerRequest::Execute(Box::new(authorized))) {
+        Ok(BrokerResponse::Frozen { code }) => assert_eq!(code, "broker_frozen"),
+        other => panic!("unexpected frozen response: {other:?}"),
+    }
+    let _ = broker.kill();
+    let _ = broker.wait();
+}
+
+fn assert_cancellation_checkpoint(
+    cancel_after_evaluation: bool,
+    cancel_before_replacement: bool,
+    nonce: u64,
+) {
+    let directory = tempfile::tempdir().expect("tempdir");
+    let source = directory.path().join("source.md");
+    let input = b"cancel checkpoint  \n";
+    fs::write(&source, input).expect("source");
+    let supervisor = Path::new(env!("CARGO_BIN_EXE_capability_supervisor"));
+    let authorized = request(supervisor, input, nonce, true);
+    let registry = registry_for(std::slice::from_ref(&authorized));
+    let (mut broker, client) = start_broker(
+        &directory,
+        &registry,
+        supervisor,
+        BrokerTestControls {
+            cancel_after_evaluation,
+            cancel_before_replacement,
+            ..Default::default()
+        },
+    );
+    match client.request(BrokerRequest::Execute(Box::new(authorized.clone()))) {
+        Ok(BrokerResponse::Quarantined { code, .. }) => {
+            assert!(
+                code.starts_with("supervisor_failed_1_"),
+                "unexpected code: {code}"
+            );
+        }
+        other => panic!("unexpected cancellation response: {other:?}"),
+    }
+    let journal = BrokerJournal::load(&directory.path().join("journal.json")).expect("journal");
+    let request_digest = authorized
+        .to_proposal()
+        .expect("proposal")
+        .digest()
+        .expect("digest");
+    assert_eq!(
+        journal.status(&request_digest),
+        Some(TransactionStatus::RolledBack)
+    );
+    assert_eq!(fs::read(&source).expect("source"), input);
+    assert!(!directory.path().join(format!("output-{nonce}.md")).exists());
+    let _ = broker.kill();
+    let _ = broker.wait();
+}
+
+#[test]
+fn cancellation_checkpoints_before_replacement_preserve_workspace() {
+    assert_cancellation_checkpoint(true, false, 33);
+    assert_cancellation_checkpoint(false, true, 34);
+}
+
+#[test]
+fn occupied_broker_socket_rejects_a_second_writer() {
+    let directory = tempfile::tempdir().expect("tempdir");
+    let source = directory.path().join("source.md");
+    let input = b"occupied socket\n";
+    fs::write(&source, input).expect("source");
+    let supervisor = Path::new(env!("CARGO_BIN_EXE_capability_supervisor"));
+    let authorized = request(supervisor, input, 35, true);
+    let registry = registry_for(std::slice::from_ref(&authorized));
+    let (mut broker, client) = start_broker(
+        &directory,
+        &registry,
+        supervisor,
+        BrokerTestControls::default(),
+    );
+    let status = Command::new(env!("CARGO_BIN_EXE_capability_broker"))
+        .args([
+            client.socket_path().as_os_str(),
+            directory.path().as_os_str(),
+            directory.path().join("journal.json").as_os_str(),
+            directory.path().join("evidence.json").as_os_str(),
+            supervisor.as_os_str(),
+            directory.path().join("broker.seed").as_os_str(),
+        ])
+        .status()
+        .expect("second broker spawn");
+    assert_eq!(status.code(), Some(2));
     let _ = broker.kill();
     let _ = broker.wait();
 }

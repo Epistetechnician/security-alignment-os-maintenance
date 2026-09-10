@@ -29,8 +29,10 @@ pub const MAX_TEXT_LEN: usize = 256;
 pub const MAX_BYTES: u64 = 1_000_000;
 pub const MAX_RUNTIME_MS: u64 = 5_000;
 pub const WORKSPACE_SCOPE: &str = "broker-workspace";
-pub const TRANSFORMER_ID: &str = "uppercase-ascii-file-transform-v1";
+pub const TRANSFORMER_ID: &str = "trim-trailing-ascii-spaces-markdown-v1";
 
+#[cfg(unix)]
+use std::os::unix::fs::MetadataExt;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 #[cfg(unix)]
@@ -65,6 +67,28 @@ fn safe_relative_path(value: &str) -> bool {
         && Path::new(value)
             .components()
             .all(|component| matches!(component, Component::Normal(_)))
+}
+
+fn root_markdown_path(value: &str) -> bool {
+    safe_relative_path(value)
+        && Path::new(value).components().count() == 1
+        && Path::new(value)
+            .extension()
+            .is_some_and(|extension| extension == "md")
+}
+
+fn is_unlinked_regular_file(path: &Path) -> bool {
+    let Ok(metadata) = fs::symlink_metadata(path) else {
+        return false;
+    };
+    if !metadata.file_type().is_file() {
+        return false;
+    }
+    #[cfg(unix)]
+    if metadata.nlink() != 1 {
+        return false;
+    }
+    true
 }
 
 fn canonical_within(root: &Path, path: &Path) -> Result<PathBuf> {
@@ -110,7 +134,7 @@ pub fn workspace_file(workspace: &Path, relative: &str) -> Result<PathBuf> {
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum FileTransformOperation {
-    UppercaseAscii,
+    TrimTrailingAsciiSpaces,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -129,6 +153,8 @@ pub struct FileTransformRequest {
     pub requested_at: u64,
     pub expires_at: u64,
     pub nonce: u64,
+    #[serde(default)]
+    pub cancel_requested: bool,
     pub telemetry_present: bool,
 }
 
@@ -140,6 +166,8 @@ impl FileTransformRequest {
             || !valid_text(&self.evidence_id)
             || !safe_relative_path(&self.source_relpath)
             || !safe_relative_path(&self.destination_relpath)
+            || !root_markdown_path(&self.source_relpath)
+            || !root_markdown_path(&self.destination_relpath)
             || self.source_relpath == self.destination_relpath
             || !valid_digest(&self.input_digest)
             || !valid_digest(&self.executable_digest)
@@ -552,6 +580,9 @@ pub struct BrokerConfig {
     pub supervisor_path: PathBuf,
     pub kill_after_executing: bool,
     pub kill_after_rename: bool,
+    pub cancel_after_rename: bool,
+    pub cancel_after_evaluation: bool,
+    pub cancel_before_replacement: bool,
 }
 
 pub struct Broker {
@@ -564,6 +595,8 @@ pub struct Broker {
     kernel: Kernel,
     journal: BrokerJournal,
     frozen: bool,
+    #[cfg(unix)]
+    listener: UnixListener,
 }
 
 pub fn executable_digest(path: &Path) -> Result<String> {
@@ -598,6 +631,8 @@ impl Broker {
                     "broker workspace is not a directory".into(),
                 ));
             }
+            #[cfg(unix)]
+            let listener = bind_exclusive_socket(&config.socket_path)?;
             let supervisor_digest = executable_digest(&config.supervisor_path)?;
             let mut journal = match BrokerJournal::recover(&config.journal_path) {
                 Ok(value) => value,
@@ -647,6 +682,8 @@ impl Broker {
                 kernel,
                 journal,
                 frozen,
+                #[cfg(unix)]
+                listener,
             })
         } else {
             Err(Error::Rejected("broker workspace does not exist".into()))
@@ -754,8 +791,15 @@ impl Broker {
                 return Self::quarantined(Some(request_digest), "destination_path_escape", None)
             }
         };
-        if !source.is_file() || destination.exists() {
+        if !root_markdown_path(&request.source_relpath)
+            || !root_markdown_path(&request.destination_relpath)
+            || !is_unlinked_regular_file(&source)
+            || destination.exists()
+        {
             return Self::quarantined(Some(request_digest), "file_scope_invalid", None);
+        }
+        if request.cancel_requested {
+            return Self::rejected(Some(request_digest), "cancelled_before_admission");
         }
         let source_bytes = match fs::read(&source) {
             Ok(value) if value.len() as u64 <= request.max_bytes => value,
@@ -856,12 +900,13 @@ impl Broker {
             request: request.clone(),
             workspace: self.workspace.clone(),
             expected_output_digest: digest_bytes(
-                &source_bytes
-                    .iter()
-                    .map(|byte| byte.to_ascii_uppercase())
-                    .collect::<Vec<_>>(),
+                &transform_output(request.operation, &source_bytes)
+                    .map_err(|_| "transform_failed")
+                    .unwrap_or_default(),
             ),
             launch_token_digest: digest_bytes(launch_token.as_bytes()),
+            cancel_after_evaluation: self.config.cancel_after_evaluation,
+            cancel_before_replacement: self.config.cancel_before_replacement,
         };
         let job_path = self
             .workspace
@@ -875,6 +920,11 @@ impl Broker {
             &source_bytes,
         );
         let _ = fs::remove_file(&job_path);
+        let result = if self.config.cancel_after_rename && result.is_ok() {
+            Err("cancelled_after_replacement".to_owned())
+        } else {
+            result
+        };
         match result {
             Ok(output_digest) => {
                 if self.config.kill_after_rename {
@@ -1048,11 +1098,8 @@ impl Broker {
 
     #[cfg(unix)]
     pub fn serve(mut self) -> Result<()> {
-        if self.config.socket_path.exists() {
-            fs::remove_file(&self.config.socket_path)?;
-        }
-        let listener = UnixListener::bind(&self.config.socket_path)?;
         fs::set_permissions(&self.config.socket_path, fs::Permissions::from_mode(0o600))?;
+        let listener = self.listener.try_clone()?;
         for stream in listener.incoming() {
             match stream {
                 Ok(stream) => {
@@ -1067,12 +1114,29 @@ impl Broker {
     }
 }
 
+#[cfg(unix)]
+fn bind_exclusive_socket(path: &Path) -> Result<UnixListener> {
+    match UnixListener::bind(path) {
+        Ok(listener) => Ok(listener),
+        Err(error) if error.kind() == std::io::ErrorKind::AddrInUse => {
+            if UnixStream::connect(path).is_ok() {
+                return Err(Error::Rejected("broker_lock_occupied".into()));
+            }
+            fs::remove_file(path)?;
+            UnixListener::bind(path).map_err(Error::from)
+        }
+        Err(error) => Err(Error::from(error)),
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct SupervisorJob {
     pub request: FileTransformRequest,
     pub workspace: PathBuf,
     pub expected_output_digest: String,
     pub launch_token_digest: String,
+    pub cancel_after_evaluation: bool,
+    pub cancel_before_replacement: bool,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -1103,7 +1167,12 @@ pub fn run_supervisor_job(job_path: &Path) -> Result<SupervisorOutcome> {
     let workspace = fs::canonicalize(&job.workspace)?;
     let source = safe_join(&workspace, &job.request.source_relpath)?;
     let destination = safe_join(&workspace, &job.request.destination_relpath)?;
-    if !source.is_file() || destination.exists() || job.request.executable_digest.is_empty() {
+    if !root_markdown_path(&job.request.source_relpath)
+        || !root_markdown_path(&job.request.destination_relpath)
+        || !is_unlinked_regular_file(&source)
+        || destination.exists()
+        || job.request.executable_digest.is_empty()
+    {
         return Err(Error::Rejected("supervisor file scope is invalid".into()));
     }
     let input = fs::read(&source)?;
@@ -1112,11 +1181,16 @@ pub fn run_supervisor_job(job_path: &Path) -> Result<SupervisorOutcome> {
     {
         return Err(Error::Rejected("supervisor input binding failed".into()));
     }
-    let output: Vec<u8> = input.iter().map(|byte| byte.to_ascii_uppercase()).collect();
+    let output = transform_output(job.request.operation, &input)?;
     let output_digest = digest_bytes(&output);
     if output_digest != job.expected_output_digest {
         return Err(Error::Rejected(
             "supervisor output expectation failed".into(),
+        ));
+    }
+    if job.cancel_after_evaluation {
+        return Err(Error::Rejected(
+            "supervisor cancellation after evaluation".into(),
         ));
     }
     let stage = workspace.join(format!(".broker-stage-{}.tmp", job.expected_output_digest));
@@ -1130,6 +1204,11 @@ pub fn run_supervisor_job(job_path: &Path) -> Result<SupervisorOutcome> {
         if digest_bytes(&fs::read(&source)?) != job.request.input_digest || destination.exists() {
             return Err(std::io::Error::other("source changed during staging"));
         }
+        if job.cancel_before_replacement {
+            return Err(std::io::Error::other(
+                "supervisor cancellation before replacement",
+            ));
+        }
         fs::rename(&stage, &destination)?;
         Ok::<(), std::io::Error>(())
     })();
@@ -1141,6 +1220,39 @@ pub fn run_supervisor_job(job_path: &Path) -> Result<SupervisorOutcome> {
         output_digest,
         bytes_written: output.len() as u64,
     })
+}
+
+/// Recompute the only permitted maintenance transformation from exact input
+/// bytes. ASCII spaces immediately before LF or CRLF line endings, and at EOF,
+/// are removed; tabs and all other bytes are preserved.
+pub fn transform_output(operation: FileTransformOperation, input: &[u8]) -> Result<Vec<u8>> {
+    match operation {
+        FileTransformOperation::TrimTrailingAsciiSpaces => {
+            let mut output = Vec::with_capacity(input.len());
+            let mut line_start = 0;
+            for index in 0..=input.len() {
+                if index != input.len() && input[index] != b'\n' {
+                    continue;
+                }
+                let content_end = if index > line_start && input[index - 1] == b'\r' {
+                    index - 1
+                } else {
+                    index
+                };
+                let mut trimmed_end = content_end;
+                while trimmed_end > line_start && input[trimmed_end - 1] == b' ' {
+                    trimmed_end -= 1;
+                }
+                output.extend_from_slice(&input[line_start..trimmed_end]);
+                output.extend_from_slice(&input[content_end..index]);
+                if index != input.len() {
+                    output.push(b'\n');
+                    line_start = index + 1;
+                }
+            }
+            Ok(output)
+        }
+    }
 }
 
 #[cfg(target_os = "macos")]
@@ -1307,5 +1419,39 @@ impl BrokerClient {
             BrokerResponse::Hello(value) => Ok(value),
             _ => Err(Error::Rejected("broker hello failed".into())),
         }
+    }
+}
+
+#[cfg(test)]
+mod transform_tests {
+    use super::*;
+
+    #[test]
+    fn trailing_ascii_spaces_are_removed_without_rewriting_other_bytes() {
+        let input = b"alpha  \n beta\t \r\ngamma  ";
+        assert_eq!(
+            transform_output(FileTransformOperation::TrimTrailingAsciiSpaces, input)
+                .expect("transform"),
+            b"alpha\n beta\t\r\ngamma"
+        );
+    }
+
+    #[test]
+    fn only_root_level_markdown_paths_are_valid_for_the_fixed_operation() {
+        assert!(root_markdown_path("README.md"));
+        assert!(!root_markdown_path("README.MD"));
+        assert!(!root_markdown_path("docs/README.md"));
+        assert!(!root_markdown_path("README.txt"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn hardlinked_source_is_not_admitted() {
+        let directory = tempfile::tempdir().expect("directory");
+        let source = directory.path().join("README.md");
+        let alias = directory.path().join("README-alias.md");
+        fs::write(&source, b"content").expect("source");
+        fs::hard_link(&source, &alias).expect("hard link");
+        assert!(!is_unlinked_regular_file(&source));
     }
 }

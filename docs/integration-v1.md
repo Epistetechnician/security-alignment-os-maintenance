@@ -109,8 +109,18 @@ rejects a repeated receipt digest, and permits one typed
 the explicit `local-direct-v1` offer ID; offer-backed settlement requires the
 exact offer ID, provider, price, and runtime digest. The proposal remains
 `AuthorizationRequired`; no payment path exists. The verifier's
-verified/reserved sets support canonical caller-owned save/load/recovery. No
-provider, wallet, chain, zero-knowledge, FHE, or MPC workload runs.
+verified/reserved sets support canonical caller-owned save/load/recovery.
+`crypto_adapters::SettlementIntent` attaches only to that
+`AuthorizationRequired` proposal. It binds the job, specification, artifact,
+accepted-evidence, receipt, policy, chain, contract, beneficiary, and payment
+digests into a zero-value intent. `DryRunAdapter` emits an unsigned,
+network-free preparation record; `reconcile` accepts only an exact zero-value
+observation, rejects absence, and quarantines ambiguity or identity mismatch.
+`CryptoJournal` provides canonical append-only replay, idempotent event
+handling, terminal quarantine, and temporary-snapshot recovery. These records
+do not read a chain, sign bytes, move value, prove provider correctness, or
+authorize payout. No provider, wallet, chain, zero-knowledge, FHE, or MPC
+workload runs.
 
 `governance::ReleaseRegistry` preserves an immutable base and rollback target.
 Shadow and canary advances require the candidate's first evidence digest, then a

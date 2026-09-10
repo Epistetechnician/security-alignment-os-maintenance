@@ -26,6 +26,7 @@ pub mod causal;
 pub mod checker;
 pub mod claims;
 pub mod contract;
+pub mod crypto_adapters;
 pub mod custody;
 pub mod execution_gate;
 pub mod faults;

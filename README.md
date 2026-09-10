@@ -35,8 +35,8 @@ pnpm run lint
 ```
 
 The Rust test suite exercises completion, rollback, specialist consent, local
-audit persistence, and one fixed integer-sum receipt. It makes no provider
-calls or settlement transactions.
+audit persistence, one fixed integer-sum receipt, and offline crypto-adapter
+replay/reconciliation. It makes no provider calls or settlement transactions.
 
 The heavy gate is `pnpm run lint`. Faster gates are `lint:fast`, `test:focused`,
 `verify:contracts` and `verify:full`. `pnpm` only dispatches Cargo checks; no
@@ -64,6 +64,7 @@ JavaScript runtime dependencies are installed.
 | `routing` | Digest-only caller-selected specialist routing bound to active tenant consent and immutable identity |
 | `integration` | Evidence-bound workflow execution, receipt-gated execution, broker completion acceptance with pinned identity and output recomputation, lifecycle completion/quarantine, observation, rollback, freeze, and kill disposition |
 | `market` | Fixed local sum with job/input commitments, typed exact-offer receipts, result recomputation, binding/timeout/replay checks, and an authorization-required settlement proposal |
+| `crypto_adapters` | Zero-value chain identity, settlement-intent binding, deterministic unsigned dry-run preparation, exact observation reconciliation, append-only hash-chained replay, idempotency, quarantine, and canonical recovery |
 | `governance` | Shadow/canary/local-release records with immutable base, phase evidence, lifecycle validation, and canonical persistence/recovery |
 | `replication` | Frozen digest-only replication packets, independently signed operator results, exact comparison, mismatch quarantine, and canonical recovery |
 | `adaptation` | Immutable-base shadow/canary controls, evaluator/policy/resource/prediction-lock binding, independent promotion, rollback, and terminal freeze |
@@ -85,7 +86,9 @@ blocks access; it does not claim secure disk erasure.
 The remaining production gates include authenticated reviewers, Linux host
 hardening and independent replication, secret custody beyond the transient
 launch token, model serving/training, held-out scientific evaluation, external
-red-team replication, deployment and settlement. The local tests do not
+red-team replication, deployment and settlement. The crypto-adapter seam is
+offline and zero-value: it does not hold keys, sign, call chains, reconcile
+authoritative external state, or authorize payout. The local tests do not
 satisfy those gates.
 
 ## Build records

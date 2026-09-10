@@ -10,6 +10,7 @@
 //! transaction, move value, or authorize a payout.
 
 use crate::{canonical_bytes, digest, valid_digest, Error, Result, CLAIM_CEILING, STATE_SLICE};
+use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -17,6 +18,8 @@ use std::path::Path;
 
 const FORMAT_VERSION: u8 = 1;
 const DRY_RUN_ACTION: &str = "prepare-only-v1";
+const PROVIDER_KEY_FORMAT_VERSION: u8 = 1;
+const SIGNATURE_LEN: usize = 64;
 
 fn valid_text(value: &str) -> bool {
     !value.is_empty() && !value.chars().any(char::is_control)
@@ -971,6 +974,162 @@ impl WireEnvelope {
     }
 }
 
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct ProviderKeyRecord {
+    pub key_id: String,
+    pub public_key: Vec<u8>,
+    pub revoked: bool,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct ProviderKeyRegistry {
+    records: BTreeMap<String, ProviderKeyRecord>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+struct ProviderKeyDocument {
+    version: u8,
+    records: Vec<ProviderKeyRecord>,
+}
+
+impl ProviderKeyRegistry {
+    pub fn validate(&self) -> Result<()> {
+        for (key_id, record) in &self.records {
+            if key_id != &record.key_id
+                || !valid_text(key_id)
+                || record.public_key.len() != 32
+                || VerifyingKey::from_bytes(
+                    &record.public_key.as_slice().try_into().map_err(|_| {
+                        Error::Invalid("provider public key length is invalid".into())
+                    })?,
+                )
+                .is_err()
+            {
+                return Err(Error::Invalid(
+                    "provider key registry contains an invalid record".into(),
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    pub fn insert(&mut self, key_id: impl Into<String>, public_key: Vec<u8>) -> Result<()> {
+        let key_id = key_id.into();
+        if !valid_text(&key_id) || public_key.len() != 32 {
+            return Err(Error::Invalid(
+                "provider public key record is malformed".into(),
+            ));
+        }
+        let key_bytes: [u8; 32] = public_key
+            .as_slice()
+            .try_into()
+            .map_err(|_| Error::Invalid("provider public key length is invalid".into()))?;
+        VerifyingKey::from_bytes(&key_bytes)
+            .map_err(|_| Error::Invalid("provider public key is invalid".into()))?;
+        if self.records.contains_key(&key_id) {
+            return Err(Error::Rejected(
+                "provider key identity already exists".into(),
+            ));
+        }
+        self.records.insert(
+            key_id.clone(),
+            ProviderKeyRecord {
+                key_id,
+                public_key,
+                revoked: false,
+            },
+        );
+        self.validate()
+    }
+
+    pub fn revoke(&mut self, key_id: &str) -> Result<()> {
+        let record = self
+            .records
+            .get_mut(key_id)
+            .ok_or_else(|| Error::Invalid("provider key identity is unknown".into()))?;
+        if record.revoked {
+            return Err(Error::Rejected("provider key is already revoked".into()));
+        }
+        record.revoked = true;
+        Ok(())
+    }
+
+    fn verify(&self, key_id: &str, message: &[u8], signature: &[u8]) -> Result<()> {
+        self.validate()?;
+        let record = self
+            .records
+            .get(key_id)
+            .ok_or_else(|| Error::Rejected("provider signing key is not trusted".into()))?;
+        if record.revoked {
+            return Err(Error::Rejected("provider signing key is revoked".into()));
+        }
+        let key_bytes: [u8; 32] = record
+            .public_key
+            .as_slice()
+            .try_into()
+            .map_err(|_| Error::Invalid("provider public key length is invalid".into()))?;
+        let key = VerifyingKey::from_bytes(&key_bytes)
+            .map_err(|_| Error::Invalid("provider public key is invalid".into()))?;
+        let signature_bytes: [u8; SIGNATURE_LEN] = signature
+            .try_into()
+            .map_err(|_| Error::Invalid("provider signature length is invalid".into()))?;
+        key.verify(message, &Signature::from_bytes(&signature_bytes))
+            .map_err(|_| {
+                Error::Rejected("provider observation signature verification failed".into())
+            })
+    }
+
+    fn document(&self) -> ProviderKeyDocument {
+        ProviderKeyDocument {
+            version: PROVIDER_KEY_FORMAT_VERSION,
+            records: self.records.values().cloned().collect(),
+        }
+    }
+
+    pub fn save(&self, path: &Path) -> Result<()> {
+        self.validate()?;
+        let temporary = path.with_extension("tmp");
+        fs::write(&temporary, canonical_bytes(&self.document())?)?;
+        fs::rename(temporary, path)?;
+        Ok(())
+    }
+
+    pub fn load(path: &Path) -> Result<Self> {
+        let bytes = fs::read(path)?;
+        let document: ProviderKeyDocument = serde_json::from_slice(&bytes)?;
+        if document.version != PROVIDER_KEY_FORMAT_VERSION || canonical_bytes(&document)? != bytes {
+            return Err(Error::Journal(
+                "provider key registry bytes are not canonical JSON".into(),
+            ));
+        }
+        let mut registry = Self::default();
+        for record in document.records {
+            let key_id = record.key_id;
+            let public_key = record.public_key;
+            let revoked = record.revoked;
+            registry.insert(key_id.clone(), public_key)?;
+            if revoked {
+                registry.revoke(&key_id)?;
+            }
+        }
+        registry.validate()?;
+        Ok(registry)
+    }
+
+    pub fn recover(path: &Path) -> Result<Self> {
+        match Self::load(path) {
+            Ok(registry) => Ok(registry),
+            Err(Error::Persistence(error)) if error.kind() == std::io::ErrorKind::NotFound => {
+                let temporary = path.with_extension("tmp");
+                let registry = Self::load(&temporary)?;
+                fs::rename(temporary, path)?;
+                Ok(registry)
+            }
+            Err(error) => Err(error),
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum ObservationStatus {
     NotFound,
@@ -1029,6 +1188,117 @@ impl ReconciliationObservation {
     pub fn digest(&self) -> Result<String> {
         self.validate()?;
         digest(self)
+    }
+}
+
+/// A provider-signed observation envelope for offline authenticity checking.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct ProviderObservationEnvelope {
+    pub schema_version: u8,
+    pub state_slice: String,
+    pub provider_id: String,
+    pub key_id: String,
+    pub observation: ReconciliationObservation,
+    pub observation_digest: String,
+    pub signature: Vec<u8>,
+}
+
+impl ProviderObservationEnvelope {
+    pub fn unsigned(
+        provider_id: impl Into<String>,
+        key_id: impl Into<String>,
+        observation: ReconciliationObservation,
+    ) -> Result<Self> {
+        let envelope = Self {
+            schema_version: FORMAT_VERSION,
+            state_slice: STATE_SLICE.into(),
+            provider_id: provider_id.into(),
+            key_id: key_id.into(),
+            observation_digest: observation.digest()?,
+            observation,
+            signature: Vec::new(),
+        };
+        envelope.validate_unsigned_shape()?;
+        Ok(envelope)
+    }
+
+    pub fn signing_bytes(&self) -> Result<Vec<u8>> {
+        self.validate_unsigned_shape()?;
+        let mut unsigned = self.clone();
+        unsigned.signature.clear();
+        canonical_bytes(&unsigned)
+    }
+
+    pub fn encode(&self) -> Result<Vec<u8>> {
+        self.validate()?;
+        canonical_bytes(self)
+    }
+
+    pub fn decode(bytes: &[u8]) -> Result<Self> {
+        reject_duplicate_json_keys(bytes)?;
+        let envelope: Self = serde_json::from_slice(bytes)?;
+        if canonical_bytes(&envelope)? != bytes {
+            return Err(Error::Journal(
+                "provider observation bytes are not canonical JSON".into(),
+            ));
+        }
+        envelope.validate()?;
+        Ok(envelope)
+    }
+
+    pub fn verify(
+        &self,
+        keys: &ProviderKeyRegistry,
+        intent: &SettlementIntent,
+    ) -> Result<ReconciliationObservation> {
+        intent.validate()?;
+        self.validate()?;
+        if self.provider_id != self.observation.beneficiary {
+            return Err(Error::Quarantined(
+                "provider observation identity does not bind the beneficiary".into(),
+            ));
+        }
+        if !observation_identity_matches(intent, &self.observation)? {
+            return Err(Error::Quarantined(
+                "provider observation identity does not bind the settlement intent".into(),
+            ));
+        }
+        keys.verify(&self.key_id, &self.signing_bytes()?, &self.signature)?;
+        Ok(self.observation.clone())
+    }
+
+    pub fn verify_and_reconcile(
+        &self,
+        keys: &ProviderKeyRegistry,
+        intent: &SettlementIntent,
+    ) -> Result<ReconciliationResult> {
+        let observation = self.verify(keys, intent)?;
+        reconcile(intent, &observation)
+    }
+
+    fn validate(&self) -> Result<()> {
+        self.validate_unsigned_shape()?;
+        if self.signature.len() != SIGNATURE_LEN {
+            return Err(Error::Invalid(
+                "provider observation signature length is invalid".into(),
+            ));
+        }
+        Ok(())
+    }
+
+    fn validate_unsigned_shape(&self) -> Result<()> {
+        if self.schema_version != FORMAT_VERSION
+            || self.state_slice != STATE_SLICE
+            || !valid_text(&self.provider_id)
+            || !valid_text(&self.key_id)
+            || self.observation_digest != self.observation.digest()?
+            || !valid_digest(&self.observation_digest)
+        {
+            return Err(Error::Invalid(
+                "provider observation envelope is malformed".into(),
+            ));
+        }
+        Ok(())
     }
 }
 

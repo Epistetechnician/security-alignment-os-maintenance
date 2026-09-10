@@ -64,7 +64,7 @@ JavaScript runtime dependencies are installed.
 | `routing` | Digest-only caller-selected specialist routing bound to active tenant consent and immutable identity |
 | `integration` | Evidence-bound workflow execution, receipt-gated execution, broker completion acceptance with pinned identity and output recomputation, lifecycle completion/quarantine, observation, rollback, freeze, and kill disposition |
 | `market` | Fixed local sum with job/input commitments, typed exact-offer receipts, result recomputation, binding/timeout/replay checks, and an authorization-required settlement proposal |
-| `crypto_adapters` | Registry-backed zero-value settlement eligibility, provider-shaped canonical wire envelopes with duplicate-key rejection, deterministic unsigned dry-run preparation, exact observation reconciliation, authorization-required resolution and payout proposals, append-only hash-chained replay, idempotency, quarantine, and canonical recovery |
+| `crypto_adapters` | Registry-backed zero-value settlement eligibility, provider-shaped canonical wire envelopes with duplicate-key rejection, deterministic unsigned dry-run preparation, signed provider-observation verification with revocable caller-owned keys, exact observation reconciliation, authorization-required resolution and payout proposals, append-only hash-chained replay, idempotency, quarantine, and canonical recovery |
 | `governance` | Shadow/canary/local-release records with immutable base, phase evidence, lifecycle validation, and canonical persistence/recovery |
 | `replication` | Frozen digest-only replication packets, independently signed operator results, exact comparison, mismatch quarantine, and canonical recovery |
 | `adaptation` | Immutable-base shadow/canary controls, evaluator/policy/resource/prediction-lock binding, independent promotion, rollback, and terminal freeze |
@@ -87,9 +87,10 @@ The remaining production gates include authenticated reviewers, Linux host
 hardening and independent replication, secret custody beyond the transient
 launch token, model serving/training, held-out scientific evaluation, external
 red-team replication, deployment and settlement. The crypto-adapter seam is
-offline and zero-value: it does not hold keys, sign, call chains, reconcile
-authoritative external state, or authorize payout. The local tests do not
-satisfy those gates.
+offline and zero-value: it stores only caller-supplied public keys, does not
+sign, call chains, reconcile authoritative external state, or authorize payout.
+The local signature check does not establish provider correctness or trusted
+identity. The local tests do not satisfy those gates.
 
 ## Build records
 
@@ -104,6 +105,7 @@ satisfy those gates.
 - [Deterministic property checks](docs/property-checks-v1.md)
 - [Signed capability receipts](docs/receipts-v1.md)
 - [External execution gate](docs/execution-gate-v1.md)
+- [Crypto adapter contracts V3](docs/crypto-adapters-v3.md)
 - [External capability broker](docs/broker-v1.md)
 - [Schema registry](docs/schema-v1.md)
 - [Fault injection](docs/fault-injection-v1.md)

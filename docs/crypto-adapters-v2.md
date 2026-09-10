@@ -5,6 +5,8 @@ State slice: `security-alignment-os-foundation-v1`.
 V2 hardens the V1 offline adapter seam without opening an external integration.
 It replaces caller-only settlement evidence with registry-backed eligibility
 and adds strict provider-shaped wire envelopes for the three dry-run labels.
+V3 adds signed provider-observation intake; see
+`docs/crypto-adapters-v3.md`.
 
 ## Registry-backed eligibility
 

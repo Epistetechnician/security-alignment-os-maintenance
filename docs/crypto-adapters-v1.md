@@ -4,7 +4,8 @@ State slice: `security-alignment-os-foundation-v1`.
 
 This document records the V1 local adapter seam. It is a pure-data contract and
 not a chain integration. V2 hardening is documented in
-`docs/crypto-adapters-v2.md`. The adapter names are stable labels for future,
+`docs/crypto-adapters-v2.md`; V3 signed observation intake is documented in
+`docs/crypto-adapters-v3.md`. The adapter names are stable labels for future,
 separately reviewed implementations: `HyperliquidDryRun`, `EvmEscrowDryRun`,
 and `TempoDryRun`.
 
@@ -70,5 +71,6 @@ provenance status.
 eligibility, all three adapter labels, canonical wire round trips, duplicate
 key rejection, ambiguity quarantine, identity mismatch, nonzero-value
 rejection, resolution and payout-proposal binding, idempotent replay,
-canonical persistence, and temporary-journal recovery. The root verification
+canonical persistence, temporary-journal recovery, signed provider observation
+verification, and provider-key persistence/recovery. The root verification
 command remains `pnpm run lint`.

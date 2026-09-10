@@ -3,10 +3,12 @@
 //! State slice: `security-alignment-os-foundation-v1`.
 //! No wallet, key, network, provider, transaction, or value movement is used.
 
+use ed25519_dalek::{Signer, SigningKey};
 use security_alignment_os::artifacts::{ArtifactManifest, ArtifactRegistry};
 use security_alignment_os::crypto_adapters::{
     reconcile, AdapterEventKind, AdapterKind, AppendDisposition, ChainIdentity, CryptoJournal,
-    DryRunAdapter, ObservationStatus, PayoutProposal, ReconciliationObservation, SettlementIntent,
+    DryRunAdapter, ObservationStatus, PayoutProposal, ProviderKeyRegistry,
+    ProviderObservationEnvelope, ReconciliationObservation, SettlementIntent,
     SettlementIntentContext, SettlementRequest, SettlementResolution, WireEnvelope,
 };
 use security_alignment_os::market;
@@ -124,6 +126,48 @@ fn setup() -> (
     (intent, adapter, observation, intent_digest)
 }
 
+fn signed_provider_observation(
+    observation: ReconciliationObservation,
+) -> (ProviderKeyRegistry, ProviderObservationEnvelope, SigningKey) {
+    let signing_key = SigningKey::from_bytes(&[7u8; 32]);
+    let mut keys = ProviderKeyRegistry::default();
+    keys.insert(
+        "provider-key-crypto-1",
+        signing_key.verifying_key().to_bytes().to_vec(),
+    )
+    .expect("provider key");
+    let mut envelope = ProviderObservationEnvelope::unsigned(
+        observation.beneficiary.clone(),
+        "provider-key-crypto-1",
+        observation,
+    )
+    .expect("unsigned provider observation");
+    envelope.signature = signing_key
+        .sign(&envelope.signing_bytes().expect("provider signing bytes"))
+        .to_bytes()
+        .to_vec();
+    let bytes = envelope.encode().expect("canonical provider envelope");
+    let decoded = ProviderObservationEnvelope::decode(&bytes).expect("decode provider envelope");
+    assert_eq!(decoded, envelope);
+    let mut noncanonical = bytes.clone();
+    noncanonical.insert(0, b' ');
+    assert!(matches!(
+        ProviderObservationEnvelope::decode(&noncanonical),
+        Err(Error::Journal(_))
+    ));
+    let bytes_as_text = String::from_utf8(bytes).expect("provider envelope UTF-8");
+    let duplicate_key = bytes_as_text.replace(
+        "\"provider_id\":\"local-sum\"",
+        "\"provider_id\":\"local-sum\",\"provider_id\":\"local-sum\"",
+    );
+    assert_ne!(duplicate_key, bytes_as_text);
+    assert!(matches!(
+        ProviderObservationEnvelope::decode(duplicate_key.as_bytes()),
+        Err(Error::Journal(_))
+    ));
+    (keys, envelope, signing_key)
+}
+
 #[test]
 fn dry_run_adapter_replays_and_reconciles_without_authority() {
     let (intent, adapter, observation, intent_digest) = setup();
@@ -217,6 +261,83 @@ fn dry_run_adapter_replays_and_reconciles_without_authority() {
         AppendDisposition::AlreadyPresent
     );
     journal.validate().expect("valid replay journal");
+}
+
+#[test]
+fn signed_provider_observation_is_verified_before_reconciliation() {
+    let (intent, _, observation, _) = setup();
+    let (keys, envelope, signing_key) = signed_provider_observation(observation.clone());
+    assert_eq!(
+        envelope
+            .verify(&keys, &intent)
+            .expect("verified observation"),
+        observation
+    );
+    let result = envelope
+        .verify_and_reconcile(&keys, &intent)
+        .expect("verified reconciliation");
+    assert!(!result.payout_authorized);
+    assert!(!result.network_attempted);
+    assert!(!result.value_moved);
+
+    let mut forged_signature = envelope.clone();
+    forged_signature.signature[0] ^= 1;
+    assert!(matches!(
+        forged_signature.verify(&keys, &intent),
+        Err(Error::Rejected(_))
+    ));
+
+    let mut forged_observation = envelope.clone();
+    forged_observation.observation.payment_id = "other-payment".into();
+    assert!(matches!(
+        forged_observation.verify(&keys, &intent),
+        Err(Error::Invalid(_))
+    ));
+
+    let mut revoked_keys = keys.clone();
+    revoked_keys
+        .revoke("provider-key-crypto-1")
+        .expect("revoke provider key");
+    assert!(matches!(
+        envelope.verify(&revoked_keys, &intent),
+        Err(Error::Rejected(_))
+    ));
+
+    let mut unknown_key = ProviderObservationEnvelope::unsigned(
+        observation.beneficiary.clone(),
+        "unknown-provider-key",
+        observation,
+    )
+    .expect("unknown-key envelope");
+    unknown_key.signature = signing_key
+        .sign(
+            &unknown_key
+                .signing_bytes()
+                .expect("unknown-key signing bytes"),
+        )
+        .to_bytes()
+        .to_vec();
+    assert!(matches!(
+        unknown_key.verify(&keys, &intent),
+        Err(Error::Rejected(_))
+    ));
+}
+
+#[test]
+fn provider_key_registry_persists_canonically_and_recovers() {
+    let (keys, _, _) = signed_provider_observation(setup().2);
+    let directory = tempfile::tempdir().expect("directory");
+    let path = directory.path().join("provider-keys.json");
+    keys.save(&path).expect("save provider keys");
+    let loaded = ProviderKeyRegistry::load(&path).expect("load provider keys");
+    loaded.validate().expect("valid loaded keys");
+
+    let temporary = path.with_extension("tmp");
+    std::fs::rename(&path, &temporary).expect("move provider keys to temporary");
+    let recovered = ProviderKeyRegistry::recover(&path).expect("recover provider keys");
+    recovered.validate().expect("valid recovered keys");
+    assert!(path.exists());
+    assert!(!temporary.exists());
 }
 
 #[test]

@@ -775,5 +775,9 @@ fn crypto_transition_is_valid(current: Option<AdapterEventKind>, next: AdapterEv
                 Some(AdapterEventKind::DryRunPrepared),
                 AdapterEventKind::Quarantined
             )
+            | (
+                Some(AdapterEventKind::Reconciled),
+                AdapterEventKind::PayoutProposed
+            )
     )
 }

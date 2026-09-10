@@ -44,6 +44,22 @@ the envelope digest. `validate` then recomputes the provider-specific field
 from the intent digest. No provider SDK or chain-specific signing algorithm is
 implemented here.
 
+## Resolution and payout boundary
+
+`SettlementResolution::from_reconciliation` is the only path from an exact
+matching dry-run observation to a resolution record. It repeats the intent's
+receipt, evidence, artifact, eligibility, policy, payment, chain, beneficiary,
+asset, and zero-amount bindings and remains `AuthorizationRequired`.
+`PayoutProposal::from_resolution` derives a deterministic request digest and
+reuses the payment ID as the idempotency key. Both records reject mutation of
+the amount, authorization, signing, network, value, or claim-ceiling fields.
+
+`CryptoJournal::append_payout_proposed` permits this record only after
+`Reconciled` and makes `PayoutProposed` terminal. A matching local observation
+therefore produces an auditable proposal boundary, never an authorized payout.
+Missing, ambiguous, or mismatched observations cannot produce a resolution or
+advance the journal.
+
 ## Independent verification
 
 `checker::validate_crypto_journal` independently recomputes the event shape,
@@ -51,7 +67,8 @@ hash chain, one-key-per-intent rule, duplicate identities, and legal
 transitions without calling `CryptoJournal::validate`. The adapter tests cover
 all three wire variants, canonical round trips, duplicate-key rejection,
 noncanonical bytes, registry-backed intent construction, ambiguity quarantine,
-nonzero-value rejection, idempotent replay, and journal recovery.
+resolution and payout-proposal binding, nonzero-value rejection, idempotent
+replay, and journal recovery.
 
 ## Claim ceiling
 

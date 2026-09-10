@@ -1099,6 +1099,309 @@ impl ReconciliationResult {
     }
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub enum AuthorizationStatus {
+    AuthorizationRequired,
+}
+
+/// Proposal-only resolution produced after an exact local reconciliation.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct SettlementResolution {
+    pub schema_version: u8,
+    pub state_slice: String,
+    pub intent_digest: String,
+    pub reconciliation_digest: String,
+    pub evidence_digest: String,
+    pub artifact_digest: String,
+    pub eligibility_digest: String,
+    pub policy_digest: String,
+    pub payment_id: String,
+    pub chain_id: u64,
+    pub contract_address: String,
+    pub asset: String,
+    pub beneficiary: String,
+    pub amount: u64,
+    pub status: AuthorizationStatus,
+    pub payout_authorized: bool,
+    pub signed: bool,
+    pub network_attempted: bool,
+    pub value_moved: bool,
+    pub claim_ceiling: String,
+    pub resolution_digest: String,
+}
+
+impl SettlementResolution {
+    pub fn from_reconciliation(
+        intent: &SettlementIntent,
+        observation: &ReconciliationObservation,
+        reconciliation: &ReconciliationResult,
+    ) -> Result<Self> {
+        intent.validate()?;
+        reconciliation.validate(intent, observation)?;
+        let mut resolution = Self {
+            schema_version: FORMAT_VERSION,
+            state_slice: STATE_SLICE.into(),
+            intent_digest: intent.digest()?,
+            reconciliation_digest: reconciliation.digest()?,
+            evidence_digest: intent.evidence_digest.clone(),
+            artifact_digest: intent.artifact_digest.clone(),
+            eligibility_digest: intent.eligibility_digest.clone(),
+            policy_digest: intent.policy_digest.clone(),
+            payment_id: intent.payment_id.clone(),
+            chain_id: intent.chain_id,
+            contract_address: intent.contract_address.clone(),
+            asset: intent.asset.clone(),
+            beneficiary: intent.beneficiary.clone(),
+            amount: 0,
+            status: AuthorizationStatus::AuthorizationRequired,
+            payout_authorized: false,
+            signed: false,
+            network_attempted: false,
+            value_moved: false,
+            claim_ceiling: CLAIM_CEILING.into(),
+            resolution_digest: String::new(),
+        };
+        resolution.resolution_digest = resolution.computed_digest()?;
+        resolution.validate(intent, observation, reconciliation)?;
+        Ok(resolution)
+    }
+
+    fn computed_digest(&self) -> Result<String> {
+        let mut unsigned = self.clone();
+        unsigned.resolution_digest.clear();
+        digest(&unsigned)
+    }
+
+    pub fn validate(
+        &self,
+        intent: &SettlementIntent,
+        observation: &ReconciliationObservation,
+        reconciliation: &ReconciliationResult,
+    ) -> Result<()> {
+        intent.validate()?;
+        reconciliation.validate(intent, observation)?;
+        self.validate_shape()?;
+        if self.intent_digest != intent.digest()?
+            || self.reconciliation_digest != reconciliation.digest()?
+            || self.evidence_digest != intent.evidence_digest
+            || self.artifact_digest != intent.artifact_digest
+            || self.eligibility_digest != intent.eligibility_digest
+            || self.policy_digest != intent.policy_digest
+            || self.payment_id != intent.payment_id
+            || self.chain_id != intent.chain_id
+            || self.contract_address != intent.contract_address
+            || self.asset != intent.asset
+            || self.beneficiary != intent.beneficiary
+            || self.amount != 0
+            || self.status != AuthorizationStatus::AuthorizationRequired
+            || self.payout_authorized
+            || self.signed
+            || self.network_attempted
+            || self.value_moved
+            || self.claim_ceiling != CLAIM_CEILING
+            || self.resolution_digest != self.computed_digest()?
+        {
+            return Err(Error::Rejected(
+                "crypto settlement resolution violates the authorization boundary".into(),
+            ));
+        }
+        Ok(())
+    }
+
+    pub fn digest(&self) -> Result<String> {
+        self.validate_shape()?;
+        Ok(self.resolution_digest.clone())
+    }
+
+    fn validate_shape(&self) -> Result<()> {
+        if self.schema_version != FORMAT_VERSION
+            || self.state_slice != STATE_SLICE
+            || !valid_digest(&self.intent_digest)
+            || !valid_digest(&self.reconciliation_digest)
+            || !valid_digest(&self.evidence_digest)
+            || !valid_digest(&self.artifact_digest)
+            || !valid_digest(&self.eligibility_digest)
+            || !valid_digest(&self.policy_digest)
+            || !valid_text(&self.payment_id)
+            || self.chain_id == 0
+            || !valid_text(&self.contract_address)
+            || !valid_text(&self.asset)
+            || !valid_text(&self.beneficiary)
+            || self.amount != 0
+            || self.status != AuthorizationStatus::AuthorizationRequired
+            || self.payout_authorized
+            || self.signed
+            || self.network_attempted
+            || self.value_moved
+            || self.claim_ceiling != CLAIM_CEILING
+            || !valid_digest(&self.resolution_digest)
+        {
+            return Err(Error::Rejected(
+                "crypto settlement resolution shape violates the authorization boundary".into(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// A deterministic, zero-value payout proposal awaiting external authorization.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct PayoutProposal {
+    pub schema_version: u8,
+    pub state_slice: String,
+    pub intent_digest: String,
+    pub resolution_digest: String,
+    pub evidence_digest: String,
+    pub artifact_digest: String,
+    pub eligibility_digest: String,
+    pub policy_digest: String,
+    pub payment_id: String,
+    pub idempotency_key: String,
+    pub chain_id: u64,
+    pub contract_address: String,
+    pub asset: String,
+    pub beneficiary: String,
+    pub amount: u64,
+    pub status: AuthorizationStatus,
+    pub payout_authorized: bool,
+    pub signed: bool,
+    pub network_attempted: bool,
+    pub value_moved: bool,
+    pub claim_ceiling: String,
+    pub request_digest: String,
+    pub proposal_digest: String,
+}
+
+impl PayoutProposal {
+    pub fn from_resolution(
+        intent: &SettlementIntent,
+        resolution: &SettlementResolution,
+    ) -> Result<Self> {
+        intent.validate()?;
+        resolution.validate_shape()?;
+        let resolution_digest = resolution.digest()?;
+        let mut proposal = Self {
+            schema_version: FORMAT_VERSION,
+            state_slice: STATE_SLICE.into(),
+            intent_digest: intent.digest()?,
+            resolution_digest: resolution_digest.clone(),
+            evidence_digest: intent.evidence_digest.clone(),
+            artifact_digest: intent.artifact_digest.clone(),
+            eligibility_digest: intent.eligibility_digest.clone(),
+            policy_digest: intent.policy_digest.clone(),
+            payment_id: intent.payment_id.clone(),
+            idempotency_key: intent.payment_id.clone(),
+            chain_id: intent.chain_id,
+            contract_address: intent.contract_address.clone(),
+            asset: intent.asset.clone(),
+            beneficiary: intent.beneficiary.clone(),
+            amount: 0,
+            status: AuthorizationStatus::AuthorizationRequired,
+            payout_authorized: false,
+            signed: false,
+            network_attempted: false,
+            value_moved: false,
+            claim_ceiling: CLAIM_CEILING.into(),
+            request_digest: digest(&(
+                "payout-proposal-request-v1",
+                &intent.payment_id,
+                &resolution_digest,
+                &intent.policy_digest,
+            ))?,
+            proposal_digest: String::new(),
+        };
+        proposal.proposal_digest = proposal.computed_digest()?;
+        proposal.validate(intent, resolution)?;
+        Ok(proposal)
+    }
+
+    fn computed_digest(&self) -> Result<String> {
+        let mut unsigned = self.clone();
+        unsigned.proposal_digest.clear();
+        digest(&unsigned)
+    }
+
+    pub fn validate(
+        &self,
+        intent: &SettlementIntent,
+        resolution: &SettlementResolution,
+    ) -> Result<()> {
+        intent.validate()?;
+        resolution.validate_shape()?;
+        self.validate_shape()?;
+        if self.intent_digest != intent.digest()?
+            || self.resolution_digest != resolution.digest()?
+            || self.evidence_digest != intent.evidence_digest
+            || self.artifact_digest != intent.artifact_digest
+            || self.eligibility_digest != intent.eligibility_digest
+            || self.policy_digest != intent.policy_digest
+            || self.payment_id != intent.payment_id
+            || self.idempotency_key != intent.payment_id
+            || self.chain_id != intent.chain_id
+            || self.contract_address != intent.contract_address
+            || self.asset != intent.asset
+            || self.beneficiary != intent.beneficiary
+            || self.amount != 0
+            || self.status != AuthorizationStatus::AuthorizationRequired
+            || self.payout_authorized
+            || self.signed
+            || self.network_attempted
+            || self.value_moved
+            || self.claim_ceiling != CLAIM_CEILING
+            || self.request_digest
+                != digest(&(
+                    "payout-proposal-request-v1",
+                    &intent.payment_id,
+                    &resolution.digest()?,
+                    &intent.policy_digest,
+                ))?
+            || self.proposal_digest != self.computed_digest()?
+        {
+            return Err(Error::Rejected(
+                "crypto payout proposal violates the authorization boundary".into(),
+            ));
+        }
+        Ok(())
+    }
+
+    pub fn digest(&self) -> Result<String> {
+        self.validate_shape()?;
+        Ok(self.proposal_digest.clone())
+    }
+
+    fn validate_shape(&self) -> Result<()> {
+        if self.schema_version != FORMAT_VERSION
+            || self.state_slice != STATE_SLICE
+            || !valid_digest(&self.intent_digest)
+            || !valid_digest(&self.resolution_digest)
+            || !valid_digest(&self.evidence_digest)
+            || !valid_digest(&self.artifact_digest)
+            || !valid_digest(&self.eligibility_digest)
+            || !valid_digest(&self.policy_digest)
+            || !valid_text(&self.payment_id)
+            || self.idempotency_key != self.payment_id
+            || self.chain_id == 0
+            || !valid_text(&self.contract_address)
+            || !valid_text(&self.asset)
+            || !valid_text(&self.beneficiary)
+            || self.amount != 0
+            || self.status != AuthorizationStatus::AuthorizationRequired
+            || self.payout_authorized
+            || self.signed
+            || self.network_attempted
+            || self.value_moved
+            || self.claim_ceiling != CLAIM_CEILING
+            || !valid_digest(&self.request_digest)
+            || !valid_digest(&self.proposal_digest)
+        {
+            return Err(Error::Rejected(
+                "crypto payout proposal shape violates the authorization boundary".into(),
+            ));
+        }
+        Ok(())
+    }
+}
+
 pub fn reconcile(
     intent: &SettlementIntent,
     observation: &ReconciliationObservation,
@@ -1157,6 +1460,7 @@ pub enum AdapterEventKind {
     Proposed,
     DryRunPrepared,
     Reconciled,
+    PayoutProposed,
     Quarantined,
 }
 
@@ -1334,6 +1638,29 @@ impl CryptoJournal {
         )
     }
 
+    pub fn append_payout_proposed(
+        &mut self,
+        intent: &SettlementIntent,
+        resolution: &SettlementResolution,
+        payout: &PayoutProposal,
+        recorded_at: u64,
+    ) -> Result<AppendDisposition> {
+        payout.validate(intent, resolution)?;
+        let intent_digest = intent.digest()?;
+        if payout.intent_digest != intent_digest {
+            return Err(Error::Quarantined(
+                "crypto payout proposal is bound to another intent".into(),
+            ));
+        }
+        self.append_event(
+            &intent_digest,
+            &intent.payment_id,
+            AdapterEventKind::PayoutProposed,
+            &payout.digest()?,
+            recorded_at,
+        )
+    }
+
     pub fn append_quarantined(
         &mut self,
         intent: &SettlementIntent,
@@ -1488,6 +1815,10 @@ fn transition_is_valid(current: Option<AdapterEventKind>, next: AdapterEventKind
             | (
                 Some(AdapterEventKind::DryRunPrepared),
                 AdapterEventKind::Quarantined
+            )
+            | (
+                Some(AdapterEventKind::Reconciled),
+                AdapterEventKind::PayoutProposed
             )
     )
 }

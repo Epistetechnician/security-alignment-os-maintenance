@@ -122,8 +122,11 @@ accepts only an exact zero-value observation, rejects absence, and quarantines
 ambiguity or identity mismatch. `CryptoJournal` and
 `checker::validate_crypto_journal` provide producer and independent canonical
 append-only replay checks, idempotent event handling, terminal quarantine, and
-temporary-snapshot recovery. These records do not read a chain, sign bytes,
-move value, prove provider correctness, or authorize payout. No provider,
+temporary-snapshot recovery. `SettlementResolution` and `PayoutProposal` carry
+an exact matching result to an authorization-required, zero-value proposal
+boundary; `PayoutProposed` is terminal in the local journal. These records do
+not read a chain, sign bytes, move value, prove provider correctness, or
+authorize payout. No provider,
 wallet, chain, zero-knowledge, FHE, or MPC workload runs.
 
 `governance::ReleaseRegistry` preserves an immutable base and rollback target.

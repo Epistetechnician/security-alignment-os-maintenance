@@ -28,15 +28,17 @@ and `TempoDryRun`.
 5. `DryRunAdapter::prepare_wire` emits strict provider-shaped canonical JSON
    envelopes for the three dry-run labels. Decoding rejects duplicate keys,
    noncanonical bytes, adapter mismatches, and digest drift.
-6. `CryptoJournal` appends `Proposed`, `DryRunPrepared`, `Reconciled`, or
-   `Quarantined` events to a canonical hash chain. It enforces per-intent
-   transitions, one idempotency key per intent, terminal states, canonical
-   persistence, and recovery of a valid temporary snapshot. Replaying the
-   same event returns `AlreadyPresent` without appending a second record.
+6. `CryptoJournal` appends `Proposed`, `DryRunPrepared`, `Reconciled`,
+   `PayoutProposed`, or `Quarantined` events to a canonical hash chain. It
+   enforces per-intent transitions, one idempotency key per intent, terminal
+   states, canonical persistence, and recovery of a valid temporary snapshot.
+   Replaying the same event returns `AlreadyPresent` without appending a
+   second record.
 
 The journal is a caller-owned local record. `Reconciled` means only that the
-caller-provided observation matched the zero-value intent; it is not a payout
-authorization and cannot be used to obtain one from this crate.
+caller-provided observation matched the zero-value intent. V2 then permits an
+authorization-required resolution and payout proposal; `PayoutProposed` is a
+terminal proposal state, not payout authorization.
 
 ## Boundaries and claim ceiling
 
@@ -44,9 +46,9 @@ This slice creates no wallet, stores no private key, performs no signing,
 opens no socket, calls no RPC or provider API, submits no transaction, and
 moves no value. It does not prove that a chain event happened, that a provider
 completed computation, that evidence is independently accepted, or that a
-beneficiary controls an address. `accepted_evidence_digest` is a caller
-assertion that must be connected to an independently reviewed evidence plane
-by a later authority-bearing slice.
+beneficiary controls an address. V2 derives the evidence, artifact, and
+eligibility digests from caller-owned accepted registries; those local role
+assertions are not authenticated external authority.
 
 The claim ceiling remains:
 
@@ -67,5 +69,6 @@ provenance status.
 `tests/crypto_adapters_e2e.rs` covers the complete local path, registry-backed
 eligibility, all three adapter labels, canonical wire round trips, duplicate
 key rejection, ambiguity quarantine, identity mismatch, nonzero-value
-rejection, idempotent replay, canonical persistence, and temporary-journal
-recovery. The root verification command remains `pnpm run lint`.
+rejection, resolution and payout-proposal binding, idempotent replay,
+canonical persistence, and temporary-journal recovery. The root verification
+command remains `pnpm run lint`.

@@ -6,8 +6,8 @@
 use security_alignment_os::artifacts::{ArtifactManifest, ArtifactRegistry};
 use security_alignment_os::crypto_adapters::{
     reconcile, AdapterEventKind, AdapterKind, AppendDisposition, ChainIdentity, CryptoJournal,
-    DryRunAdapter, ObservationStatus, ReconciliationObservation, SettlementIntent,
-    SettlementIntentContext, SettlementRequest, WireEnvelope,
+    DryRunAdapter, ObservationStatus, PayoutProposal, ReconciliationObservation, SettlementIntent,
+    SettlementIntentContext, SettlementRequest, SettlementResolution, WireEnvelope,
 };
 use security_alignment_os::market;
 use security_alignment_os::{digest, Error, Evidence, EvidenceRegistry, STATE_SLICE};
@@ -137,6 +137,29 @@ fn dry_run_adapter_replays_and_reconciles_without_authority() {
     assert!(!result.signed);
     assert!(!result.network_attempted);
     assert!(!result.value_moved);
+    let resolution = SettlementResolution::from_reconciliation(&intent, &observation, &result)
+        .expect("authorization-required resolution");
+    assert_eq!(
+        resolution.status,
+        security_alignment_os::crypto_adapters::AuthorizationStatus::AuthorizationRequired
+    );
+    assert!(!resolution.payout_authorized);
+    let payout = PayoutProposal::from_resolution(&intent, &resolution)
+        .expect("authorization-required payout proposal");
+    assert!(!payout.payout_authorized);
+    assert_eq!(payout.amount, 0);
+    let mut forged_resolution = resolution.clone();
+    forged_resolution.payout_authorized = true;
+    assert!(matches!(
+        forged_resolution.validate(&intent, &observation, &result),
+        Err(Error::Rejected(_))
+    ));
+    let mut forged_payout = payout.clone();
+    forged_payout.amount = 1;
+    assert!(matches!(
+        forged_payout.validate(&intent, &resolution),
+        Err(Error::Rejected(_))
+    ));
 
     let mut journal = CryptoJournal::default();
     assert_eq!(
@@ -156,10 +179,16 @@ fn dry_run_adapter_replays_and_reconciles_without_authority() {
         AppendDisposition::Appended
     );
     assert_eq!(
-        journal.state(&intent_digest).expect("journal state"),
-        Some(AdapterEventKind::Reconciled)
+        journal
+            .append_payout_proposed(&intent, &resolution, &payout, 20)
+            .expect("payout proposal"),
+        AppendDisposition::Appended
     );
-    assert_eq!(journal.events().len(), 3);
+    assert_eq!(
+        journal.state(&intent_digest).expect("journal state"),
+        Some(AdapterEventKind::PayoutProposed)
+    );
+    assert_eq!(journal.events().len(), 4);
     security_alignment_os::checker::validate_crypto_journal(&journal)
         .expect("independent journal check");
 
@@ -179,6 +208,12 @@ fn dry_run_adapter_replays_and_reconciles_without_authority() {
         journal
             .append_reconciled(&intent, &observation, &result, 99)
             .expect("idempotent reconcile"),
+        AppendDisposition::AlreadyPresent
+    );
+    assert_eq!(
+        journal
+            .append_payout_proposed(&intent, &resolution, &payout, 99)
+            .expect("idempotent payout proposal"),
         AppendDisposition::AlreadyPresent
     );
     journal.validate().expect("valid replay journal");

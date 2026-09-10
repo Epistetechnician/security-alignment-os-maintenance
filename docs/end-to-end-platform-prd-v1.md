@@ -379,11 +379,12 @@ The current foundation slice implements only the zero-value local portion of
 this phase: a verified fixed-job proposal can become a digest-bound
 `crypto_adapters::SettlementIntent` only after accepted evidence and artifact
 registry checks, pass through one of three provider-shaped unsigned dry-run
-wire labels, and be reconciled through a canonical append-only journal with an
-independent checker. Missing evidence is not inferred, ambiguous observations
-quarantine, and a matching observation never authorizes payout. Live chain
-reads, signing, provider execution, independent settlement authority,
-disputes, and real value remain later gates.
+wire labels, resolve into an authorization-required settlement record, and
+produce a deterministic zero-value payout proposal through a canonical
+append-only journal with an independent checker. Missing evidence is not
+inferred, ambiguous observations quarantine, and a matching observation never
+authorizes payout. Live chain reads, signing, provider execution, independent
+settlement authority, disputes, and real value remain later gates.
 
 Exit claim: verifiable outsourced execution and settlement for the fixed job
 class, subject to the declared provider, chain, payment, and dispute limits.

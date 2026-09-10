@@ -111,16 +111,20 @@ exact offer ID, provider, price, and runtime digest. The proposal remains
 `AuthorizationRequired`; no payment path exists. The verifier's
 verified/reserved sets support canonical caller-owned save/load/recovery.
 `crypto_adapters::SettlementIntent` attaches only to that
-`AuthorizationRequired` proposal. It binds the job, specification, artifact,
-accepted-evidence, receipt, policy, chain, contract, beneficiary, and payment
-digests into a zero-value intent. `DryRunAdapter` emits an unsigned,
-network-free preparation record; `reconcile` accepts only an exact zero-value
-observation, rejects absence, and quarantines ambiguity or identity mismatch.
-`CryptoJournal` provides canonical append-only replay, idempotent event
-handling, terminal quarantine, and temporary-snapshot recovery. These records
-do not read a chain, sign bytes, move value, prove provider correctness, or
-authorize payout. No provider, wallet, chain, zero-knowledge, FHE, or MPC
-workload runs.
+`AuthorizationRequired` proposal and derives its evidence and artifact
+digests from live accepted `EvidenceRegistry` and `ArtifactRegistry` records.
+It binds the job, specification, artifact, accepted-evidence, eligibility,
+receipt, policy, chain, contract, beneficiary, and payment digests into a
+zero-value intent. `DryRunAdapter` emits unsigned, network-free preparation
+records and provider-shaped canonical wire envelopes; decoding rejects
+duplicate keys, noncanonical bytes, and adapter/digest drift. `reconcile`
+accepts only an exact zero-value observation, rejects absence, and quarantines
+ambiguity or identity mismatch. `CryptoJournal` and
+`checker::validate_crypto_journal` provide producer and independent canonical
+append-only replay checks, idempotent event handling, terminal quarantine, and
+temporary-snapshot recovery. These records do not read a chain, sign bytes,
+move value, prove provider correctness, or authorize payout. No provider,
+wallet, chain, zero-knowledge, FHE, or MPC workload runs.
 
 `governance::ReleaseRegistry` preserves an immutable base and rollback target.
 Shadow and canary advances require the candidate's first evidence digest, then a

@@ -2,20 +2,22 @@
 
 State slice: `security-alignment-os-foundation-v1`.
 
-This document records the implemented local adapter seam. It is a pure-data
-contract and not a chain integration. The adapter names are stable labels for
-future, separately reviewed implementations: `HyperliquidDryRun`,
-`EvmEscrowDryRun`, and `TempoDryRun`.
+This document records the V1 local adapter seam. It is a pure-data contract and
+not a chain integration. V2 hardening is documented in
+`docs/crypto-adapters-v2.md`. The adapter names are stable labels for future,
+separately reviewed implementations: `HyperliquidDryRun`, `EvmEscrowDryRun`,
+and `TempoDryRun`.
 
 ## Implemented path
 
 1. `market::ReceiptVerifier` verifies a fixed local receipt and emits a
    `SettlementProposal` with status `AuthorizationRequired`.
 2. `crypto_adapters::SettlementIntent::from_market_proposal` requires that
-   exact proposal, an accepted-evidence digest, specification/artifact/policy
-   digests, a chain identity, a payment ID, a beneficiary, and a bounded time
-   window. It binds the job, receipt, chain ID, contract address, asset, and
-   payment identity. The amount is structurally fixed at zero.
+   exact proposal, live accepted `EvidenceRegistry` and `ArtifactRegistry`
+   records, specification/policy digests, a chain identity, a payment ID, a
+   beneficiary, and a bounded time window. It derives and binds the evidence
+   record, artifact manifest, job, receipt, chain ID, contract address, asset,
+   and payment identity. The amount is structurally fixed at zero.
 3. `DryRunAdapter::prepare` emits a deterministic `DryRunReceipt`. The record
    binds the intent and adapter revision while asserting `signed = false`,
    `network_attempted = false`, and `value_moved = false`.
@@ -23,7 +25,10 @@ future, separately reviewed implementations: `HyperliquidDryRun`,
    intent. Only an exact, zero-value `Observed` record produces
    `ReconciliationStatus::Matched`. `NotFound` is rejected; `Ambiguous` and
    identity/asset/beneficiary mismatches are quarantined.
-5. `CryptoJournal` appends `Proposed`, `DryRunPrepared`, `Reconciled`, or
+5. `DryRunAdapter::prepare_wire` emits strict provider-shaped canonical JSON
+   envelopes for the three dry-run labels. Decoding rejects duplicate keys,
+   noncanonical bytes, adapter mismatches, and digest drift.
+6. `CryptoJournal` appends `Proposed`, `DryRunPrepared`, `Reconciled`, or
    `Quarantined` events to a canonical hash chain. It enforces per-intent
    transitions, one idempotency key per intent, terminal states, canonical
    persistence, and recovery of a valid temporary snapshot. Replaying the
@@ -59,7 +64,8 @@ provenance status.
 
 ## Verification
 
-`tests/crypto_adapters_e2e.rs` covers the complete local path, all three adapter
-labels, ambiguity quarantine, identity mismatch, nonzero-value rejection,
-idempotent replay, canonical persistence, and temporary-journal recovery. The
-root verification command remains `pnpm run lint`.
+`tests/crypto_adapters_e2e.rs` covers the complete local path, registry-backed
+eligibility, all three adapter labels, canonical wire round trips, duplicate
+key rejection, ambiguity quarantine, identity mismatch, nonzero-value
+rejection, idempotent replay, canonical persistence, and temporary-journal
+recovery. The root verification command remains `pnpm run lint`.

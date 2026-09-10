@@ -3,13 +3,14 @@
 //! State slice: `security-alignment-os-foundation-v1`.
 //! No wallet, key, network, provider, transaction, or value movement is used.
 
+use security_alignment_os::artifacts::{ArtifactManifest, ArtifactRegistry};
 use security_alignment_os::crypto_adapters::{
     reconcile, AdapterEventKind, AdapterKind, AppendDisposition, ChainIdentity, CryptoJournal,
     DryRunAdapter, ObservationStatus, ReconciliationObservation, SettlementIntent,
-    SettlementRequest,
+    SettlementIntentContext, SettlementRequest, WireEnvelope,
 };
 use security_alignment_os::market;
-use security_alignment_os::{digest, Error, STATE_SLICE};
+use security_alignment_os::{digest, Error, Evidence, EvidenceRegistry, STATE_SLICE};
 
 fn setup() -> (
     SettlementIntent,
@@ -31,6 +32,45 @@ fn setup() -> (
     let proposal = verifier
         .propose_settlement(&job, &receipt, 10)
         .expect("authorization-required proposal");
+    let receipt_digest = digest(&receipt).expect("receipt digest");
+    let mut evidence = EvidenceRegistry::default();
+    evidence
+        .insert(Evidence {
+            id: "evidence-crypto-1".into(),
+            source_digest: receipt_digest,
+            operator_id: "operator-crypto".into(),
+            validator_id: "validator-crypto".into(),
+            reviewer_id: "reviewer-crypto".into(),
+            valid_until: 90,
+            accepted: true,
+            revoked: false,
+        })
+        .expect("accepted evidence");
+    let evidence_record_digest = evidence
+        .record_digest("evidence-crypto-1")
+        .expect("evidence record digest");
+    let manifest = ArtifactManifest {
+        artifact_id: "artifact-crypto-1".into(),
+        subject_digest: evidence_record_digest.clone(),
+        source_digest: digest(&("artifact-source", 1u8)).expect("artifact source digest"),
+        license: "MIT".into(),
+        provenance_digest: digest(&("artifact-provenance", 1u8)).expect("provenance digest"),
+        custody_root: "/tmp/crypto-adapter-custody".into(),
+        retention_start: 0,
+        retention_until: 90,
+    };
+    let mut artifacts = ArtifactRegistry::default();
+    artifacts
+        .quarantine(manifest, "artifact-operator", "artifact-validator")
+        .expect("quarantined artifact");
+    artifacts
+        .accept(
+            "artifact-crypto-1",
+            &evidence_record_digest,
+            "artifact-reviewer",
+            10,
+        )
+        .expect("accepted artifact");
     let chain = ChainIdentity {
         schema_version: 1,
         state_slice: STATE_SLICE.into(),
@@ -40,23 +80,25 @@ fn setup() -> (
         contract_address: "local-escrow-contract".into(),
         asset: "test-credit-zero".into(),
     };
-    let intent = SettlementIntent::from_market_proposal(
-        &proposal,
-        &job,
-        &receipt,
-        chain.clone(),
-        SettlementRequest {
+    let intent = SettlementIntent::from_market_proposal(SettlementIntentContext {
+        proposal: &proposal,
+        job: &job,
+        receipt: &receipt,
+        chain: chain.clone(),
+        evidence: &evidence,
+        evidence_id: "evidence-crypto-1",
+        artifacts: &artifacts,
+        artifact_id: "artifact-crypto-1",
+        request: SettlementRequest {
             intent_id: "intent-crypto-1".into(),
             payment_id: "payment-crypto-1".into(),
             beneficiary: proposal.provider.clone(),
             specification_digest: digest(&("fixed-job-spec", 1u8)).expect("spec digest"),
-            artifact_digest: digest(&("artifact", 1u8)).expect("artifact digest"),
-            accepted_evidence_digest: digest(&("accepted-evidence", 1u8)).expect("evidence digest"),
             policy_digest: digest(&("policy", 1u8)).expect("policy digest"),
             created_at: 10,
             expires_at: 90,
         },
-    )
+    })
     .expect("settlement intent");
     let adapter = DryRunAdapter::new(chain).expect("dry-run adapter");
     let intent_digest = intent.digest().expect("intent digest");
@@ -118,6 +160,8 @@ fn dry_run_adapter_replays_and_reconciles_without_authority() {
         Some(AdapterEventKind::Reconciled)
     );
     assert_eq!(journal.events().len(), 3);
+    security_alignment_os::checker::validate_crypto_journal(&journal)
+        .expect("independent journal check");
 
     assert_eq!(
         journal
@@ -152,6 +196,39 @@ fn every_supported_adapter_label_is_prepare_only() {
         assert!(!receipt.signed);
         assert!(!receipt.network_attempted);
         assert!(!receipt.value_moved);
+    }
+}
+
+#[test]
+fn provider_wire_envelopes_round_trip_only_as_canonical_dry_runs() {
+    let (base_intent, _, _, _) = setup();
+    for adapter_kind in AdapterKind::all() {
+        let mut intent = base_intent.clone();
+        intent.adapter = adapter_kind;
+        let adapter = DryRunAdapter::new(intent.chain_identity()).expect("dry-run adapter");
+        let envelope = adapter.prepare_wire(&intent).expect("wire envelope");
+        let bytes = envelope.encode().expect("canonical wire bytes");
+        let decoded = WireEnvelope::decode(adapter_kind, &bytes).expect("decode wire bytes");
+        decoded.validate(&intent).expect("wire binding");
+        assert_eq!(decoded.adapter(), adapter_kind);
+
+        let mut noncanonical = bytes.clone();
+        noncanonical.insert(0, b' ');
+        assert!(matches!(
+            WireEnvelope::decode(adapter_kind, &noncanonical),
+            Err(Error::Journal(_))
+        ));
+
+        let bytes_as_text = String::from_utf8(bytes).expect("wire UTF-8");
+        let duplicate_key = bytes_as_text.replace(
+            "\"action\":\"prepare-only-v1\"",
+            "\"action\":\"prepare-only-v1\",\"action\":\"prepare-only-v1\"",
+        );
+        assert_ne!(duplicate_key, bytes_as_text);
+        assert!(matches!(
+            WireEnvelope::decode(adapter_kind, duplicate_key.as_bytes()),
+            Err(Error::Journal(_))
+        ));
     }
 }
 
@@ -243,6 +320,8 @@ fn journal_persistence_is_canonical_and_recovers_the_latest_snapshot() {
     journal.save(&path).expect("save journal");
     let loaded = CryptoJournal::load(&path).expect("load journal");
     assert_eq!(loaded.events(), journal.events());
+    security_alignment_os::checker::validate_crypto_journal(&loaded)
+        .expect("independent loaded journal check");
 
     let temporary = path.with_extension("tmp");
     std::fs::rename(&path, &temporary).expect("move primary to temporary");

@@ -9,6 +9,7 @@
 use crate::audit::AuditJournal;
 use crate::broker::{BrokerJournal, TransactionStatus, JOURNAL_VERSION};
 use crate::contract::{Lifecycle, LifecycleState};
+use crate::crypto_adapters::{AdapterEventKind, CryptoJournal};
 use crate::market::{SumJob, SumReceipt};
 use crate::receipts::{CapabilityReceipt, ExecutionReceipt};
 use crate::{
@@ -683,4 +684,96 @@ pub fn validate_execution_receipt(
         &Signature::from_bytes(&signature_bytes),
     )
     .map_err(|_| Error::Rejected("independent execution signature check failed".into()))
+}
+
+/// Independently validates the crypto-adapter journal hash chain and terminal
+/// state machine. This duplicates the journal equations instead of calling
+/// `CryptoJournal::validate`; it proves only local record consistency.
+pub fn validate_crypto_journal(journal: &CryptoJournal) -> Result<()> {
+    let mut previous_event_digest = None;
+    let mut states = BTreeMap::new();
+    let mut intent_keys = BTreeMap::new();
+    let mut idempotency_intents = BTreeMap::new();
+    let mut event_identities = BTreeSet::new();
+    for (expected_sequence, event) in journal.events().iter().enumerate() {
+        if event.schema_version != 1
+            || event.state_slice != STATE_SLICE
+            || event.sequence != expected_sequence as u64
+            || !valid_digest(&event.intent_digest)
+            || !valid_text(&event.idempotency_key)
+            || !valid_digest(&event.subject_digest)
+            || event.previous_event_digest != previous_event_digest
+            || !valid_digest(&event.event_digest)
+        {
+            return Err(Error::Journal(
+                "independent crypto journal shape check failed".into(),
+            ));
+        }
+        let mut unsigned = event.clone();
+        unsigned.event_digest.clear();
+        if event.event_digest != digest(&unsigned)? {
+            return Err(Error::Journal(
+                "independent crypto event digest check failed".into(),
+            ));
+        }
+        if let Some(existing_intent) =
+            idempotency_intents.insert(event.idempotency_key.clone(), event.intent_digest.clone())
+        {
+            if existing_intent != event.intent_digest {
+                return Err(Error::Journal(
+                    "independent crypto idempotency collision detected".into(),
+                ));
+            }
+        }
+        if let Some(existing_key) =
+            intent_keys.insert(event.intent_digest.clone(), event.idempotency_key.clone())
+        {
+            if existing_key != event.idempotency_key {
+                return Err(Error::Journal(
+                    "independent crypto intent key drift detected".into(),
+                ));
+            }
+        }
+        if !event_identities.insert((
+            event.intent_digest.clone(),
+            event.kind,
+            event.subject_digest.clone(),
+        )) {
+            return Err(Error::Journal(
+                "independent crypto duplicate event detected".into(),
+            ));
+        }
+        let current = states.get(&event.intent_digest).copied();
+        if !crypto_transition_is_valid(current, event.kind) {
+            return Err(Error::Journal(
+                "independent crypto transition check failed".into(),
+            ));
+        }
+        states.insert(event.intent_digest.clone(), event.kind);
+        previous_event_digest = Some(event.event_digest.clone());
+    }
+    Ok(())
+}
+
+fn crypto_transition_is_valid(current: Option<AdapterEventKind>, next: AdapterEventKind) -> bool {
+    matches!(
+        (current, next),
+        (None, AdapterEventKind::Proposed)
+            | (
+                Some(AdapterEventKind::Proposed),
+                AdapterEventKind::DryRunPrepared
+            )
+            | (
+                Some(AdapterEventKind::Proposed),
+                AdapterEventKind::Quarantined
+            )
+            | (
+                Some(AdapterEventKind::DryRunPrepared),
+                AdapterEventKind::Reconciled
+            )
+            | (
+                Some(AdapterEventKind::DryRunPrepared),
+                AdapterEventKind::Quarantined
+            )
+    )
 }

@@ -22,6 +22,183 @@ fn valid_text(value: &str) -> bool {
     !value.is_empty() && !value.chars().any(char::is_control)
 }
 
+fn reject_duplicate_json_keys(bytes: &[u8]) -> Result<()> {
+    let mut scanner = JsonKeyScanner { bytes, position: 0 };
+    scanner.parse_value()?;
+    scanner.skip_whitespace();
+    if scanner.position != bytes.len() {
+        return Err(Error::Journal(
+            "crypto wire bytes contain trailing JSON data".into(),
+        ));
+    }
+    Ok(())
+}
+
+struct JsonKeyScanner<'a> {
+    bytes: &'a [u8],
+    position: usize,
+}
+
+impl<'a> JsonKeyScanner<'a> {
+    fn skip_whitespace(&mut self) {
+        while self
+            .bytes
+            .get(self.position)
+            .is_some_and(|byte| matches!(byte, b' ' | b'\n' | b'\r' | b'\t'))
+        {
+            self.position += 1;
+        }
+    }
+
+    fn parse_value(&mut self) -> Result<()> {
+        self.skip_whitespace();
+        match self.bytes.get(self.position).copied() {
+            Some(b'{') => self.parse_object(),
+            Some(b'[') => self.parse_array(),
+            Some(b'"') => self.parse_string().map(|_| ()),
+            Some(b't') => self.parse_literal(b"true"),
+            Some(b'f') => self.parse_literal(b"false"),
+            Some(b'n') => self.parse_literal(b"null"),
+            Some(b'-' | b'0'..=b'9') => self.parse_number(),
+            _ => Err(Error::Journal("crypto wire JSON value is malformed".into())),
+        }
+    }
+
+    fn parse_object(&mut self) -> Result<()> {
+        self.position += 1;
+        self.skip_whitespace();
+        let mut keys = BTreeSet::new();
+        if self.bytes.get(self.position) == Some(&b'}') {
+            self.position += 1;
+            return Ok(());
+        }
+        loop {
+            self.skip_whitespace();
+            let key = self.parse_string()?;
+            if !keys.insert(key) {
+                return Err(Error::Journal(
+                    "crypto wire JSON object contains duplicate keys".into(),
+                ));
+            }
+            self.skip_whitespace();
+            if self.bytes.get(self.position) != Some(&b':') {
+                return Err(Error::Journal(
+                    "crypto wire JSON object is missing a colon".into(),
+                ));
+            }
+            self.position += 1;
+            self.parse_value()?;
+            self.skip_whitespace();
+            match self.bytes.get(self.position) {
+                Some(b',') => self.position += 1,
+                Some(b'}') => {
+                    self.position += 1;
+                    return Ok(());
+                }
+                _ => {
+                    return Err(Error::Journal(
+                        "crypto wire JSON object separator is malformed".into(),
+                    ))
+                }
+            }
+        }
+    }
+
+    fn parse_array(&mut self) -> Result<()> {
+        self.position += 1;
+        self.skip_whitespace();
+        if self.bytes.get(self.position) == Some(&b']') {
+            self.position += 1;
+            return Ok(());
+        }
+        loop {
+            self.parse_value()?;
+            self.skip_whitespace();
+            match self.bytes.get(self.position) {
+                Some(b',') => self.position += 1,
+                Some(b']') => {
+                    self.position += 1;
+                    return Ok(());
+                }
+                _ => {
+                    return Err(Error::Journal(
+                        "crypto wire JSON array separator is malformed".into(),
+                    ))
+                }
+            }
+        }
+    }
+
+    fn parse_string(&mut self) -> Result<String> {
+        let start = self.position;
+        if self.bytes.get(self.position) != Some(&b'"') {
+            return Err(Error::Journal(
+                "crypto wire JSON object key is not a string".into(),
+            ));
+        }
+        self.position += 1;
+        loop {
+            match self.bytes.get(self.position).copied() {
+                Some(b'"') => {
+                    self.position += 1;
+                    return serde_json::from_slice(&self.bytes[start..self.position]).map_err(
+                        |_| Error::Journal("crypto wire JSON string is malformed".into()),
+                    );
+                }
+                Some(b'\\') => {
+                    self.position += 1;
+                    match self.bytes.get(self.position).copied() {
+                        Some(b'u') => self.position += 5,
+                        Some(_) => self.position += 1,
+                        None => {
+                            return Err(Error::Journal(
+                                "crypto wire JSON escape is incomplete".into(),
+                            ))
+                        }
+                    }
+                }
+                Some(byte) if byte < 0x20 => {
+                    return Err(Error::Journal(
+                        "crypto wire JSON string contains a control byte".into(),
+                    ))
+                }
+                Some(_) => self.position += 1,
+                None => {
+                    return Err(Error::Journal(
+                        "crypto wire JSON string is unterminated".into(),
+                    ))
+                }
+            }
+        }
+    }
+
+    fn parse_literal(&mut self, literal: &[u8]) -> Result<()> {
+        if self.bytes.get(self.position..self.position + literal.len()) == Some(literal) {
+            self.position += literal.len();
+            Ok(())
+        } else {
+            Err(Error::Journal(
+                "crypto wire JSON literal is malformed".into(),
+            ))
+        }
+    }
+
+    fn parse_number(&mut self) -> Result<()> {
+        let start = self.position;
+        while self
+            .bytes
+            .get(self.position)
+            .is_some_and(|byte| !matches!(byte, b' ' | b'\n' | b'\r' | b'\t' | b',' | b']' | b'}'))
+        {
+            self.position += 1;
+        }
+        if start == self.position {
+            return Err(Error::Journal("crypto wire JSON number is empty".into()));
+        }
+        Ok(())
+    }
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 pub enum AdapterKind {
     HyperliquidDryRun,
@@ -73,8 +250,6 @@ pub struct SettlementRequest {
     pub payment_id: String,
     pub beneficiary: String,
     pub specification_digest: String,
-    pub artifact_digest: String,
-    pub accepted_evidence_digest: String,
     pub policy_digest: String,
     pub created_at: u64,
     pub expires_at: u64,
@@ -86,13 +261,160 @@ impl SettlementRequest {
             || !valid_text(&self.payment_id)
             || !valid_text(&self.beneficiary)
             || !valid_digest(&self.specification_digest)
-            || !valid_digest(&self.artifact_digest)
-            || !valid_digest(&self.accepted_evidence_digest)
             || !valid_digest(&self.policy_digest)
             || self.expires_at <= self.created_at
         {
             return Err(Error::Invalid(
                 "crypto settlement request is incomplete".into(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// Registry-backed inputs used to derive accepted settlement eligibility.
+pub struct SettlementEvidenceContext<'a> {
+    pub proposal: &'a crate::market::SettlementProposal,
+    pub job: &'a crate::market::SumJob,
+    pub receipt: &'a crate::market::SumReceipt,
+    pub evidence: &'a crate::EvidenceRegistry,
+    pub evidence_id: &'a str,
+    pub artifacts: &'a crate::artifacts::ArtifactRegistry,
+    pub artifact_id: &'a str,
+    pub checked_at: u64,
+}
+
+/// Complete local context for converting a market proposal into a dry-run intent.
+pub struct SettlementIntentContext<'a> {
+    pub proposal: &'a crate::market::SettlementProposal,
+    pub job: &'a crate::market::SumJob,
+    pub receipt: &'a crate::market::SumReceipt,
+    pub chain: ChainIdentity,
+    pub evidence: &'a crate::EvidenceRegistry,
+    pub evidence_id: &'a str,
+    pub artifacts: &'a crate::artifacts::ArtifactRegistry,
+    pub artifact_id: &'a str,
+    pub request: SettlementRequest,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct AcceptedSettlementEvidence {
+    pub schema_version: u8,
+    pub state_slice: String,
+    pub evidence_id: String,
+    pub artifact_id: String,
+    pub receipt_digest: String,
+    pub evidence_record_digest: String,
+    pub artifact_manifest_digest: String,
+    pub checked_at: u64,
+    pub eligibility_digest: String,
+}
+
+impl AcceptedSettlementEvidence {
+    pub fn from_registries(context: SettlementEvidenceContext<'_>) -> Result<Self> {
+        context.proposal.validate(context.job, context.receipt)?;
+        context.receipt.validate(context.job, context.checked_at)?;
+        let receipt_digest = digest(context.receipt)?;
+        if !context
+            .evidence
+            .is_valid(context.evidence_id, context.checked_at, &receipt_digest)
+        {
+            return Err(Error::Rejected(
+                "accepted settlement evidence is absent, stale, revoked, or receipt-mismatched"
+                    .into(),
+            ));
+        }
+        let evidence_record_digest = context.evidence.record_digest(context.evidence_id)?;
+        let artifact = context.artifacts.require_valid(
+            context.artifact_id,
+            &evidence_record_digest,
+            context.checked_at,
+        )?;
+        let binding = Self {
+            schema_version: FORMAT_VERSION,
+            state_slice: STATE_SLICE.into(),
+            evidence_id: context.evidence_id.into(),
+            artifact_id: context.artifact_id.into(),
+            receipt_digest,
+            evidence_record_digest,
+            artifact_manifest_digest: artifact.manifest.digest()?,
+            checked_at: context.checked_at,
+            eligibility_digest: String::new(),
+        };
+        let mut binding = binding;
+        binding.eligibility_digest = binding.computed_digest()?;
+        binding.validate(
+            context.proposal,
+            context.job,
+            context.receipt,
+            context.evidence,
+            context.artifacts,
+        )?;
+        Ok(binding)
+    }
+
+    fn computed_digest(&self) -> Result<String> {
+        let mut unsigned = self.clone();
+        unsigned.eligibility_digest.clear();
+        digest(&unsigned)
+    }
+
+    pub fn validate(
+        &self,
+        proposal: &crate::market::SettlementProposal,
+        job: &crate::market::SumJob,
+        receipt: &crate::market::SumReceipt,
+        evidence: &crate::EvidenceRegistry,
+        artifacts: &crate::artifacts::ArtifactRegistry,
+    ) -> Result<()> {
+        proposal.validate(job, receipt)?;
+        receipt.validate(job, self.checked_at)?;
+        if !valid_text(&self.evidence_id)
+            || !valid_text(&self.artifact_id)
+            || self.schema_version != FORMAT_VERSION
+            || self.state_slice != STATE_SLICE
+            || self.receipt_digest != digest(receipt)?
+            || !valid_digest(&self.evidence_record_digest)
+            || !valid_digest(&self.artifact_manifest_digest)
+            || self.checked_at < receipt.completed_at
+            || !valid_digest(&self.eligibility_digest)
+            || self.eligibility_digest != self.computed_digest()?
+            || !evidence.is_valid(&self.evidence_id, self.checked_at, &self.receipt_digest)
+        {
+            return Err(Error::Rejected(
+                "accepted settlement evidence binding is invalid".into(),
+            ));
+        }
+        let evidence_record_digest = evidence.record_digest(&self.evidence_id)?;
+        let artifact =
+            artifacts.require_valid(&self.artifact_id, &evidence_record_digest, self.checked_at)?;
+        if evidence_record_digest != self.evidence_record_digest
+            || artifact.manifest.digest()? != self.artifact_manifest_digest
+        {
+            return Err(Error::Rejected(
+                "accepted settlement artifact binding is invalid".into(),
+            ));
+        }
+        Ok(())
+    }
+
+    pub fn digest(&self) -> Result<String> {
+        self.validate_shape()?;
+        digest(self)
+    }
+
+    fn validate_shape(&self) -> Result<()> {
+        if self.schema_version != FORMAT_VERSION
+            || self.state_slice != STATE_SLICE
+            || !valid_text(&self.evidence_id)
+            || !valid_text(&self.artifact_id)
+            || !valid_digest(&self.receipt_digest)
+            || !valid_digest(&self.evidence_record_digest)
+            || !valid_digest(&self.artifact_manifest_digest)
+            || !valid_digest(&self.eligibility_digest)
+        {
+            return Err(Error::Invalid(
+                "accepted settlement evidence shape is malformed".into(),
             ));
         }
         Ok(())
@@ -115,6 +437,7 @@ pub struct SettlementIntent {
     pub specification_digest: String,
     pub artifact_digest: String,
     pub evidence_digest: String,
+    pub eligibility_digest: String,
     pub receipt_digest: String,
     pub policy_digest: String,
     pub chain_id: u64,
@@ -131,19 +454,23 @@ pub struct SettlementIntent {
 impl SettlementIntent {
     /// Converts an authorization-required local market proposal into a
     /// zero-value, caller-owned adapter intent.
-    pub fn from_market_proposal(
-        proposal: &crate::market::SettlementProposal,
-        job: &crate::market::SumJob,
-        receipt: &crate::market::SumReceipt,
-        chain: ChainIdentity,
-        request: SettlementRequest,
-    ) -> Result<Self> {
-        proposal.validate(job, receipt)?;
-        chain.validate()?;
-        request.validate()?;
-        if request.beneficiary != proposal.provider
-            || request.created_at < receipt.completed_at
-            || request.expires_at > job.deadline
+    pub fn from_market_proposal(context: SettlementIntentContext<'_>) -> Result<Self> {
+        context.proposal.validate(context.job, context.receipt)?;
+        context.chain.validate()?;
+        context.request.validate()?;
+        let accepted = AcceptedSettlementEvidence::from_registries(SettlementEvidenceContext {
+            proposal: context.proposal,
+            job: context.job,
+            receipt: context.receipt,
+            evidence: context.evidence,
+            evidence_id: context.evidence_id,
+            artifacts: context.artifacts,
+            artifact_id: context.artifact_id,
+            checked_at: context.request.created_at,
+        })?;
+        if context.request.beneficiary != context.proposal.provider
+            || context.request.created_at < context.receipt.completed_at
+            || context.request.expires_at > context.job.deadline
         {
             return Err(Error::Rejected(
                 "crypto intent does not bind the market proposal".into(),
@@ -152,23 +479,24 @@ impl SettlementIntent {
         let intent = Self {
             schema_version: FORMAT_VERSION,
             state_slice: STATE_SLICE.into(),
-            intent_id: request.intent_id,
-            adapter: chain.adapter,
-            adapter_revision: chain.adapter_revision,
-            job_digest: job.digest()?,
-            specification_digest: request.specification_digest,
-            artifact_digest: request.artifact_digest,
-            evidence_digest: request.accepted_evidence_digest,
-            receipt_digest: proposal.receipt_digest.clone(),
-            policy_digest: request.policy_digest,
-            chain_id: chain.chain_id,
-            contract_address: chain.contract_address,
-            payment_id: request.payment_id,
-            beneficiary: request.beneficiary,
+            intent_id: context.request.intent_id,
+            adapter: context.chain.adapter,
+            adapter_revision: context.chain.adapter_revision,
+            job_digest: context.job.digest()?,
+            specification_digest: context.request.specification_digest,
+            artifact_digest: accepted.artifact_manifest_digest,
+            evidence_digest: accepted.evidence_record_digest,
+            eligibility_digest: accepted.eligibility_digest,
+            receipt_digest: context.proposal.receipt_digest.clone(),
+            policy_digest: context.request.policy_digest,
+            chain_id: context.chain.chain_id,
+            contract_address: context.chain.contract_address,
+            payment_id: context.request.payment_id,
+            beneficiary: context.request.beneficiary,
             amount: 0,
-            asset: chain.asset,
-            created_at: request.created_at,
-            expires_at: request.expires_at,
+            asset: context.chain.asset,
+            created_at: context.request.created_at,
+            expires_at: context.request.expires_at,
             status: IntentStatus::Proposed,
         };
         intent.validate()?;
@@ -184,6 +512,7 @@ impl SettlementIntent {
             || !valid_digest(&self.specification_digest)
             || !valid_digest(&self.artifact_digest)
             || !valid_digest(&self.evidence_digest)
+            || !valid_digest(&self.eligibility_digest)
             || !valid_digest(&self.receipt_digest)
             || !valid_digest(&self.policy_digest)
             || self.chain_id == 0
@@ -277,6 +606,39 @@ impl DryRunAdapter {
         receipt.validate(intent)?;
         Ok(receipt)
     }
+
+    pub fn prepare_wire(&self, intent: &SettlementIntent) -> Result<WireEnvelope> {
+        intent.validate()?;
+        if self.identity != intent.chain_identity() {
+            return Err(Error::Rejected(
+                "crypto adapter identity does not bind the settlement intent".into(),
+            ));
+        }
+        let intent_digest = intent.digest()?;
+        let identity = WireIdentity::from_intent(intent, &intent_digest);
+        let mut envelope = match self.identity.adapter {
+            AdapterKind::HyperliquidDryRun => WireEnvelope::Hyperliquid(HyperliquidWireEnvelope {
+                identity,
+                order_type: "dry-run-settlement-v1".into(),
+                client_order_id: digest(&("hyperliquid-client-order-v1", &intent_digest))?,
+                envelope_digest: String::new(),
+            }),
+            AdapterKind::EvmEscrowDryRun => WireEnvelope::EvmEscrow(EvmEscrowWireEnvelope {
+                identity,
+                method: "prepareEscrowSettlement".into(),
+                calldata_digest: digest(&("evm-escrow-calldata-v1", &intent_digest))?,
+                envelope_digest: String::new(),
+            }),
+            AdapterKind::TempoDryRun => WireEnvelope::Tempo(TempoWireEnvelope {
+                identity,
+                payment_memo_digest: digest(&("tempo-payment-memo-v1", &intent_digest))?,
+                envelope_digest: String::new(),
+            }),
+        };
+        envelope.set_digest()?;
+        envelope.validate(intent)?;
+        Ok(envelope)
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -350,6 +712,262 @@ impl DryRunReceipt {
             ));
         }
         Ok(self.receipt_digest.clone())
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct WireIdentity {
+    pub schema_version: u8,
+    pub state_slice: String,
+    pub adapter_revision: String,
+    pub intent_digest: String,
+    pub payment_id: String,
+    pub chain_id: u64,
+    pub contract_address: String,
+    pub asset: String,
+    pub beneficiary: String,
+    pub amount: u64,
+    pub action: String,
+    pub signed: bool,
+    pub network_attempted: bool,
+    pub value_moved: bool,
+    pub claim_ceiling: String,
+}
+
+impl WireIdentity {
+    fn from_intent(intent: &SettlementIntent, intent_digest: &str) -> Self {
+        Self {
+            schema_version: FORMAT_VERSION,
+            state_slice: STATE_SLICE.into(),
+            adapter_revision: intent.adapter_revision.clone(),
+            intent_digest: intent_digest.into(),
+            payment_id: intent.payment_id.clone(),
+            chain_id: intent.chain_id,
+            contract_address: intent.contract_address.clone(),
+            asset: intent.asset.clone(),
+            beneficiary: intent.beneficiary.clone(),
+            amount: intent.amount,
+            action: DRY_RUN_ACTION.into(),
+            signed: false,
+            network_attempted: false,
+            value_moved: false,
+            claim_ceiling: CLAIM_CEILING.into(),
+        }
+    }
+
+    fn validate_shape(&self) -> Result<()> {
+        if self.schema_version != FORMAT_VERSION
+            || self.state_slice != STATE_SLICE
+            || !valid_text(&self.adapter_revision)
+            || !valid_digest(&self.intent_digest)
+            || !valid_text(&self.payment_id)
+            || self.chain_id == 0
+            || !valid_text(&self.contract_address)
+            || !valid_text(&self.asset)
+            || !valid_text(&self.beneficiary)
+            || self.amount != 0
+            || self.action != DRY_RUN_ACTION
+            || self.signed
+            || self.network_attempted
+            || self.value_moved
+            || self.claim_ceiling != CLAIM_CEILING
+        {
+            return Err(Error::Rejected(
+                "crypto wire identity violates the foundation boundary".into(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct HyperliquidWireEnvelope {
+    pub identity: WireIdentity,
+    pub order_type: String,
+    pub client_order_id: String,
+    pub envelope_digest: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct EvmEscrowWireEnvelope {
+    pub identity: WireIdentity,
+    pub method: String,
+    pub calldata_digest: String,
+    pub envelope_digest: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct TempoWireEnvelope {
+    pub identity: WireIdentity,
+    pub payment_memo_digest: String,
+    pub envelope_digest: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub enum WireEnvelope {
+    Hyperliquid(HyperliquidWireEnvelope),
+    EvmEscrow(EvmEscrowWireEnvelope),
+    Tempo(TempoWireEnvelope),
+}
+
+impl WireEnvelope {
+    pub fn adapter(&self) -> AdapterKind {
+        match self {
+            Self::Hyperliquid(_) => AdapterKind::HyperliquidDryRun,
+            Self::EvmEscrow(_) => AdapterKind::EvmEscrowDryRun,
+            Self::Tempo(_) => AdapterKind::TempoDryRun,
+        }
+    }
+
+    fn identity(&self) -> &WireIdentity {
+        match self {
+            Self::Hyperliquid(envelope) => &envelope.identity,
+            Self::EvmEscrow(envelope) => &envelope.identity,
+            Self::Tempo(envelope) => &envelope.identity,
+        }
+    }
+
+    fn set_digest(&mut self) -> Result<()> {
+        let digest = self.computed_digest()?;
+        match self {
+            Self::Hyperliquid(envelope) => envelope.envelope_digest = digest,
+            Self::EvmEscrow(envelope) => envelope.envelope_digest = digest,
+            Self::Tempo(envelope) => envelope.envelope_digest = digest,
+        }
+        Ok(())
+    }
+
+    fn computed_digest(&self) -> Result<String> {
+        let unsigned = match self {
+            Self::Hyperliquid(envelope) => {
+                let mut unsigned = envelope.clone();
+                unsigned.envelope_digest.clear();
+                Self::Hyperliquid(unsigned)
+            }
+            Self::EvmEscrow(envelope) => {
+                let mut unsigned = envelope.clone();
+                unsigned.envelope_digest.clear();
+                Self::EvmEscrow(unsigned)
+            }
+            Self::Tempo(envelope) => {
+                let mut unsigned = envelope.clone();
+                unsigned.envelope_digest.clear();
+                Self::Tempo(unsigned)
+            }
+        };
+        digest(&unsigned)
+    }
+
+    fn validate_shape(&self) -> Result<()> {
+        self.identity().validate_shape()?;
+        match self {
+            Self::Hyperliquid(envelope) => {
+                if envelope.order_type != "dry-run-settlement-v1"
+                    || !valid_digest(&envelope.client_order_id)
+                    || !valid_digest(&envelope.envelope_digest)
+                    || envelope.envelope_digest != self.computed_digest()?
+                {
+                    return Err(Error::Rejected(
+                        "Hyperliquid dry-run wire envelope is malformed".into(),
+                    ));
+                }
+            }
+            Self::EvmEscrow(envelope) => {
+                if envelope.method != "prepareEscrowSettlement"
+                    || !valid_digest(&envelope.calldata_digest)
+                    || !valid_digest(&envelope.envelope_digest)
+                    || envelope.envelope_digest != self.computed_digest()?
+                {
+                    return Err(Error::Rejected(
+                        "EVM escrow dry-run wire envelope is malformed".into(),
+                    ));
+                }
+            }
+            Self::Tempo(envelope) => {
+                if !valid_digest(&envelope.payment_memo_digest)
+                    || !valid_digest(&envelope.envelope_digest)
+                    || envelope.envelope_digest != self.computed_digest()?
+                {
+                    return Err(Error::Rejected(
+                        "Tempo dry-run wire envelope is malformed".into(),
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    pub fn validate(&self, intent: &SettlementIntent) -> Result<()> {
+        intent.validate()?;
+        self.validate_shape()?;
+        if self.adapter() != intent.adapter
+            || self.identity() != &WireIdentity::from_intent(intent, &intent.digest()?)
+        {
+            return Err(Error::Rejected(
+                "crypto wire envelope does not bind the settlement intent".into(),
+            ));
+        }
+        let intent_digest = intent.digest()?;
+        match self {
+            Self::Hyperliquid(envelope) => {
+                if envelope.client_order_id
+                    != digest(&("hyperliquid-client-order-v1", &intent_digest))?
+                {
+                    return Err(Error::Rejected(
+                        "Hyperliquid dry-run client order binding mismatched".into(),
+                    ));
+                }
+            }
+            Self::EvmEscrow(envelope) => {
+                if envelope.calldata_digest != digest(&("evm-escrow-calldata-v1", &intent_digest))?
+                {
+                    return Err(Error::Rejected(
+                        "EVM escrow dry-run calldata binding mismatched".into(),
+                    ));
+                }
+            }
+            Self::Tempo(envelope) => {
+                if envelope.payment_memo_digest
+                    != digest(&("tempo-payment-memo-v1", &intent_digest))?
+                {
+                    return Err(Error::Rejected(
+                        "Tempo dry-run payment memo binding mismatched".into(),
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    pub fn encode(&self) -> Result<Vec<u8>> {
+        self.validate_shape()?;
+        canonical_bytes(self)
+    }
+
+    pub fn decode(adapter: AdapterKind, bytes: &[u8]) -> Result<Self> {
+        reject_duplicate_json_keys(bytes)?;
+        let envelope: Self = serde_json::from_slice(bytes)?;
+        if envelope.adapter() != adapter {
+            return Err(Error::Rejected(
+                "crypto wire envelope adapter discriminator mismatched".into(),
+            ));
+        }
+        if canonical_bytes(&envelope)? != bytes {
+            return Err(Error::Journal(
+                "crypto wire bytes are not canonical JSON".into(),
+            ));
+        }
+        envelope.validate_shape()?;
+        Ok(envelope)
+    }
+
+    pub fn digest(&self) -> Result<String> {
+        self.validate_shape()?;
+        match self {
+            Self::Hyperliquid(envelope) => Ok(envelope.envelope_digest.clone()),
+            Self::EvmEscrow(envelope) => Ok(envelope.envelope_digest.clone()),
+            Self::Tempo(envelope) => Ok(envelope.envelope_digest.clone()),
+        }
     }
 }
 

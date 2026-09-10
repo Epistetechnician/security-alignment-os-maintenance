@@ -14,7 +14,7 @@ financial, deployment, or scientific gates.
 | 2. Independent replication | `replication::FrozenReplicationPacket`, signed second-operator result, exact result comparison, mismatch quarantine, and canonical packet recovery | Contract implemented; no separate host, authenticated operator, or independent acceptance evidence is claimed |
 | 3. Shadow adaptation | `adaptation::AdaptationRecord` freezes base, candidate, evaluator, policy, resource, prediction-lock, canary, promotion, rollback, and terminal state bindings | Local pure-data contract; no training, serving, canary traffic, deployment, or production authority |
 | 4. Causal alignment research | `causal::CausalProtocol` freezes track identities and enforces qualification, prediction-lock, held-out, custody, retention, and independent-acceptance ordering | Preregistration contract only; no model execution or causal/behavioral evidence |
-| 5. External execution market | `market::SumJob` and local receipt verifier bind one fixed job class, exact offers, result recomputation, and authorization-required settlement; `crypto_adapters` adds zero-value chain/payment intent binding, unsigned dry-run preparation, exact observation reconciliation, append-only replay, idempotency, quarantine, and canonical recovery; `execution_gate::ExecutionGate` blocks external execution | Local simulation and offline adapter contracts only; no provider, payment, chain, wallet, signing, or value movement |
+| 5. External execution market | `market::SumJob` and local receipt verifier bind one fixed job class, exact offers, result recomputation, and authorization-required settlement; `crypto_adapters` adds registry-backed zero-value eligibility, provider-shaped canonical wire envelopes with duplicate-key rejection, unsigned dry-run preparation, exact observation reconciliation, append-only replay, idempotency, quarantine, canonical recovery, and an independent journal checker; `execution_gate::ExecutionGate` blocks external execution | Local simulation and offline adapter contracts only; no provider, payment, chain, wallet, signing, or value movement |
 | Shared evidence and governance | `EvidenceRegistry`, `artifacts::ArtifactManifest`, `custody::CustodyRegistry`, meet-only `claims::ClaimEnvelope`, benchmark fixtures, `alignment::PredictionLock`, existing `governance::ReleaseRegistry`, audit records, canonical persistence, and exact subject/provenance binding | Local caller-owned evidence only; authenticated identities, custody enforcement, held-out evidence, recurring review, and public release remain open |
 
 ## Narrow compute bridge
@@ -23,9 +23,10 @@ financial, deployment, or scientific gates.
 program identity, committed input digest, output schema, ordinary receipt type,
 privacy requirement, deadline, price ceiling, recomputed output, exact-job typed
 offers, immutable identity revalidation, and an authorization-required typed
-settlement proposal. `crypto_adapters` now carries that proposal through a
-zero-value, dry-run-only intent and a canonical local replay journal. It does
-not authorize or simulate a real payment.
+settlement proposal. `crypto_adapters` now carries that proposal through
+registry-backed zero-value eligibility, provider-shaped canonical dry-run
+wire, and an independently checked local replay journal. It does not authorize
+or simulate a real payment.
 It is intentionally local. No
 Hyperliquid, Boundless, HEIR, Arcium, ZK proof, FHE/MPC runtime, provider bid,
 wallet, signing key, network call, or settlement transaction is integrated.

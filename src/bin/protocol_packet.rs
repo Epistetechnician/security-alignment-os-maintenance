@@ -5,16 +5,16 @@
 //! credentials, model traces, external corpus, or scientific result.
 
 use security_alignment_os::fresh_packet::{
-    DocumentHeader, Manifest, ManifestEntry, AUTHOR, CREATED_ON, DOCUMENTS_PER_SPLIT,
-    EXPECTED_DOCUMENTS, EXPECTED_FAMILIES_PER_SPLIT, FAMILIES_PER_DOCUMENT, GENERATOR_REVISION,
-    PACKET_SCHEMA, PROTOCOL_ID, SOURCE,
+    validate_custody_root, DocumentHeader, Manifest, ManifestEntry, AUTHOR, CREATED_ON,
+    DOCUMENTS_PER_SPLIT, EXPECTED_DOCUMENTS, EXPECTED_FAMILIES_PER_SPLIT, FAMILIES_PER_DOCUMENT,
+    GENERATOR_REVISION, PACKET_SCHEMA, PROTOCOL_ID, SOURCE,
 };
 use security_alignment_os::{canonical_bytes, digest, digest_bytes, STATE_SLICE};
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::env;
 use std::fs::{self, File, OpenOptions};
-use std::io::{BufRead, BufReader, Read, Write};
+use std::io::{BufReader, Read, Write};
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
@@ -276,58 +276,18 @@ fn validate_and_write(root: &Path) -> Result<ValidatedPacket, Box<dyn std::error
 }
 
 fn validate_root(root: &Path) -> Result<ValidatedPacket, Box<dyn std::error::Error>> {
-    let root_metadata = fs::metadata(root)?;
-    if !root_metadata.is_dir() || root_metadata.permissions().mode() & 0o777 != 0o700 {
-        return Err("custody root must be a directory with mode 0700".into());
-    }
-    let manifest_path = root.join(MANIFEST_FILE);
-    let manifest_bytes = read_private_file(&manifest_path, 0o600)?;
-    let manifest = Manifest::from_canonical_bytes(&manifest_bytes)?;
-
-    let mut documents_by_split = BTreeMap::new();
-    let mut families_by_split = BTreeMap::new();
-    let mut split_families = BTreeMap::<String, BTreeSet<String>>::new();
-    for entry in &manifest.documents {
-        let document_path = root.join(Path::new(&entry.path));
-        let bytes = read_private_file(&document_path, 0o600)?;
-        if digest_bytes(&bytes) != entry.sha256 {
-            return Err(format!("SHA-256 mismatch for {}", entry.path).into());
-        }
-        let mut reader = BufReader::new(bytes.as_slice());
-        let mut header_line = String::new();
-        reader.read_line(&mut header_line)?;
-        let header = DocumentHeader::from_canonical_line(header_line.trim_end().as_bytes())?;
-        header.validate_for_entry(entry)?;
-        if reader.lines().next().is_none() {
-            return Err(format!("document body is empty for {}", entry.path).into());
-        }
-        *documents_by_split.entry(entry.split.clone()).or_insert(0) += 1;
-        let family_set = split_families.entry(entry.split.clone()).or_default();
-        for family in &entry.families {
-            if !family_set.insert(family.clone()) {
-                return Err(format!("duplicate family {} in {}", family, entry.split).into());
-            }
-        }
-    }
-    for split in ["fit", "tune", "assessment"] {
-        let document_count = documents_by_split.get(split).copied().unwrap_or_default();
-        let family_count = split_families.get(split).map_or(0, BTreeSet::len);
-        if document_count != DOCUMENTS_PER_SPLIT || family_count != EXPECTED_FAMILIES_PER_SPLIT {
-            return Err(format!("split {split} has invalid document/family counts").into());
-        }
-        families_by_split.insert(split.into(), family_count);
-    }
+    let packet = validate_custody_root(root)?;
     let review = LocalReview {
         schema: PACKET_SCHEMA.into(),
         state_slice: STATE_SLICE.into(),
         protocol_id: PROTOCOL_ID.into(),
         status: "LOCAL_PASS".into(),
-        manifest_sha256: digest_bytes(&manifest_bytes),
-        document_count: manifest.documents.len(),
-        documents_by_split,
-        families_by_split,
+        manifest_sha256: packet.manifest_sha256.clone(),
+        document_count: packet.document_count,
+        documents_by_split: packet.documents_by_split,
+        families_by_split: packet.families_by_split,
         family_duplicates: Vec::new(),
-        custody_mode: "0700-root-0600-files".into(),
+        custody_mode: packet.custody_mode,
         notes: vec![
             "synthetic local fixtures only".into(),
             "no external corpus, private data, model trace, credential, or provider call".into(),
@@ -335,7 +295,7 @@ fn validate_root(root: &Path) -> Result<ValidatedPacket, Box<dyn std::error::Err
         ],
     };
     Ok(ValidatedPacket {
-        manifest,
+        manifest: packet.manifest,
         manifest_sha256: review.manifest_sha256.clone(),
         review,
     })
@@ -461,6 +421,7 @@ fn set_mode(path: &Path, mode: u32) -> Result<(), Box<dyn std::error::Error>> {
 mod tests {
     use super::*;
     use security_alignment_os::fresh_packet::document_index;
+    use std::collections::BTreeSet;
 
     #[test]
     fn generated_documents_are_unique_and_partitioned() {

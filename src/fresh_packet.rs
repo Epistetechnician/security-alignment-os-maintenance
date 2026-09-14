@@ -7,6 +7,9 @@
 use crate::{canonical_bytes, digest, Error, Result, STATE_SLICE};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
+use std::fs::{self, File};
+use std::io::{BufRead, BufReader, Read};
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Component, Path};
 
 pub const PACKET_SCHEMA: &str = "security-alignment-os-fresh-protocol-packet-v1";
@@ -19,6 +22,7 @@ pub const DOCUMENTS_PER_SPLIT: usize = 69;
 pub const FAMILIES_PER_DOCUMENT: usize = 8;
 pub const EXPECTED_DOCUMENTS: usize = DOCUMENTS_PER_SPLIT * 3;
 pub const EXPECTED_FAMILIES_PER_SPLIT: usize = DOCUMENTS_PER_SPLIT * FAMILIES_PER_DOCUMENT;
+pub const CUSTODY_MODE: &str = "0700-root-0600-files";
 
 const SPLITS: [&str; 3] = ["fit", "tune", "assessment"];
 
@@ -203,6 +207,85 @@ impl Manifest {
         Self::from_canonical_bytes(bytes)?;
         Ok(crate::digest_bytes(bytes))
     }
+}
+
+/// Read-only result of validating a packet under an owner-only custody root.
+/// The document payloads are discarded after their hashes and headers are
+/// checked; only manifest metadata and digest/count summaries escape.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct FreshPacketValidation {
+    pub manifest: Manifest,
+    pub manifest_sha256: String,
+    pub document_count: usize,
+    pub documents_by_split: BTreeMap<String, usize>,
+    pub families_by_split: BTreeMap<String, usize>,
+    pub custody_mode: String,
+}
+
+/// Validate a complete packet without mutating the custody root.
+pub fn validate_custody_root(root: &Path) -> Result<FreshPacketValidation> {
+    let root_metadata = fs::symlink_metadata(root)?;
+    if !root_metadata.is_dir() || root_metadata.permissions().mode() & 0o777 != 0o700 {
+        return Err(Error::Invalid(
+            "fresh packet custody root must be a directory with mode 0700".into(),
+        ));
+    }
+    let manifest_path = root.join("manifest.json");
+    let manifest_bytes = read_private_file(&manifest_path)?;
+    let manifest = Manifest::from_canonical_bytes(&manifest_bytes)?;
+    let mut documents_by_split = BTreeMap::new();
+    for entry in &manifest.documents {
+        let bytes = read_private_file(&root.join(Path::new(&entry.path)))?;
+        if crate::digest_bytes(&bytes) != entry.sha256 {
+            return Err(Error::Invalid(format!(
+                "fresh packet SHA-256 mismatch for {}",
+                entry.path
+            )));
+        }
+        let mut reader = BufReader::new(bytes.as_slice());
+        let mut header_line = String::new();
+        reader.read_line(&mut header_line)?;
+        let header = DocumentHeader::from_canonical_line(header_line.trim_end().as_bytes())?;
+        header.validate_for_entry(entry)?;
+        if reader.lines().next().is_none() {
+            return Err(Error::Invalid(format!(
+                "fresh packet document body is empty for {}",
+                entry.path
+            )));
+        }
+        *documents_by_split.entry(entry.split.clone()).or_insert(0) += 1;
+    }
+    let families_by_split =
+        manifest
+            .documents
+            .iter()
+            .fold(BTreeMap::<String, usize>::new(), |mut counts, entry| {
+                *counts.entry(entry.split.clone()).or_default() += entry.families.len();
+                counts
+            });
+    Ok(FreshPacketValidation {
+        document_count: manifest.document_count,
+        manifest_sha256: crate::digest_bytes(&manifest_bytes),
+        manifest,
+        documents_by_split,
+        families_by_split,
+        custody_mode: CUSTODY_MODE.into(),
+    })
+}
+
+fn read_private_file(path: &Path) -> Result<Vec<u8>> {
+    let metadata = fs::symlink_metadata(path)?;
+    if !metadata.is_file() || metadata.permissions().mode() & 0o777 != 0o600 {
+        return Err(Error::Invalid(format!(
+            "fresh packet file is not a regular private file: {}",
+            path.display()
+        )));
+    }
+    let file = File::open(path)?;
+    let mut reader = BufReader::new(file);
+    let mut bytes = Vec::new();
+    reader.read_to_end(&mut bytes)?;
+    Ok(bytes)
 }
 
 pub fn document_id_from_path(path: &str) -> Result<String> {

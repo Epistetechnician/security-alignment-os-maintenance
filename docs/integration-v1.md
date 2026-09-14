@@ -139,6 +139,15 @@ the existing zero-value reconciliation through producer and independent paths;
 the key registry is not an authenticated trust root and the signature is not
 proof of provider correctness or chain state.
 
+`protocol_packet` provides the next bounded local evidence slice for a fresh
+protocol identity. It generates 69 synthetic documents each for `fit`, `tune`,
+and `assessment`, with eight unique families per document and a canonical
+manifest binding source, revision, split, author, path, and SHA-256. The packet
+is written outside the repository under a `0700` custody root, validated into a
+`LOCAL_PASS`, exercised by a side-effect-free dry run, and frozen only when
+both records match the manifest. This does not create held-out scientific
+evidence, independent acceptance, assessment effects, or production authority.
+
 `governance::ReleaseRegistry` preserves an immutable base and rollback target.
 Shadow and canary advances require the candidate's first evidence digest, then a
 distinct lowercase digest for the next phase. `freeze` is terminal metadata; it

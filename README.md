@@ -31,6 +31,7 @@ cargo clippy --all-targets -- -D warnings
 cargo run --bin local_demo
 cargo run --bin capability_broker -- <socket> <workspace> <journal> <evidence.json> <capability_supervisor>
 cargo run --bin broker_adversarial_runner -- <socket> <request.json> <workspace> <capability_supervisor>
+cargo run --bin protocol_packet -- <generate|validate|dry-run|freeze> <external-custody-root>
 pnpm run lint
 ```
 
@@ -106,6 +107,7 @@ identity. The local tests do not satisfy those gates.
 - [Signed capability receipts](docs/receipts-v1.md)
 - [External execution gate](docs/execution-gate-v1.md)
 - [Crypto adapter contracts V3](docs/crypto-adapters-v3.md)
+- [Fresh protocol packet V1](docs/fresh-protocol-packet-v1.md)
 - [External capability broker](docs/broker-v1.md)
 - [Schema registry](docs/schema-v1.md)
 - [Fault injection](docs/fault-injection-v1.md)

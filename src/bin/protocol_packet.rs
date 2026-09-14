@@ -4,6 +4,11 @@
 //! The packet is local test material only. It contains no private data,
 //! credentials, model traces, external corpus, or scientific result.
 
+use security_alignment_os::fresh_packet::{
+    DocumentHeader, Manifest, ManifestEntry, AUTHOR, CREATED_ON, DOCUMENTS_PER_SPLIT,
+    EXPECTED_DOCUMENTS, EXPECTED_FAMILIES_PER_SPLIT, FAMILIES_PER_DOCUMENT, GENERATOR_REVISION,
+    PACKET_SCHEMA, PROTOCOL_ID, SOURCE,
+};
 use security_alignment_os::{canonical_bytes, digest, digest_bytes, STATE_SLICE};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -11,18 +16,8 @@ use std::env;
 use std::fs::{self, File, OpenOptions};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 
-const PACKET_SCHEMA: &str = "security-alignment-os-fresh-protocol-packet-v1";
-const PROTOCOL_ID: &str = "fresh-207-552-v1";
-const GENERATOR_REVISION: &str = "protocol-packet-generator-v1";
-const SOURCE: &str = "local-synthetic-fresh-document-generator";
-const AUTHOR: &str = "local-synthetic-author-assertion";
-const CREATED_ON: &str = "2026-09-14";
-const DOCUMENTS_PER_SPLIT: usize = 69;
-const FAMILIES_PER_DOCUMENT: usize = 8;
-const EXPECTED_DOCUMENTS: usize = DOCUMENTS_PER_SPLIT * 3;
-const EXPECTED_FAMILIES_PER_SPLIT: usize = DOCUMENTS_PER_SPLIT * FAMILIES_PER_DOCUMENT;
 const MANIFEST_FILE: &str = "manifest.json";
 const REVIEW_FILE: &str = "local-review.json";
 const DRY_RUN_FILE: &str = "dry-run.json";
@@ -87,42 +82,6 @@ const OUTCOMES: [&str; 12] = [
     "the custody assertion remains caller-owned",
     "the protocol identity closes if a bound byte changes",
 ];
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-struct DocumentHeader {
-    schema: String,
-    state_slice: String,
-    protocol_id: String,
-    document_id: String,
-    source: String,
-    revision: String,
-    split: String,
-    author: String,
-    families: Vec<String>,
-    fresh_nonce: String,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-struct ManifestEntry {
-    source: String,
-    revision: String,
-    split: String,
-    author: String,
-    path: String,
-    sha256: String,
-    families: Vec<String>,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-struct Manifest {
-    schema: String,
-    state_slice: String,
-    protocol_id: String,
-    created_on: String,
-    document_count: usize,
-    families_per_document: usize,
-    documents: Vec<ManifestEntry>,
-}
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 struct LocalReview {
@@ -323,47 +282,13 @@ fn validate_root(root: &Path) -> Result<ValidatedPacket, Box<dyn std::error::Err
     }
     let manifest_path = root.join(MANIFEST_FILE);
     let manifest_bytes = read_private_file(&manifest_path, 0o600)?;
-    let manifest: Manifest = serde_json::from_slice(&manifest_bytes)?;
-    if canonical_bytes(&manifest)? != manifest_bytes
-        || manifest.schema != PACKET_SCHEMA
-        || manifest.state_slice != STATE_SLICE
-        || manifest.protocol_id != PROTOCOL_ID
-        || manifest.created_on != CREATED_ON
-        || manifest.document_count != EXPECTED_DOCUMENTS
-        || manifest.families_per_document != FAMILIES_PER_DOCUMENT
-        || manifest.documents.len() != EXPECTED_DOCUMENTS
-    {
-        return Err("manifest identity or canonical bytes are invalid".into());
-    }
+    let manifest = Manifest::from_canonical_bytes(&manifest_bytes)?;
 
-    let mut paths = BTreeSet::new();
     let mut documents_by_split = BTreeMap::new();
     let mut families_by_split = BTreeMap::new();
     let mut split_families = BTreeMap::<String, BTreeSet<String>>::new();
     for entry in &manifest.documents {
-        if entry.source != SOURCE
-            || entry.revision != GENERATOR_REVISION
-            || entry.author != AUTHOR
-            || !matches!(entry.split.as_str(), "fit" | "tune" | "assessment")
-            || entry.families.len() != FAMILIES_PER_DOCUMENT
-            || entry.families.iter().collect::<BTreeSet<_>>().len() != FAMILIES_PER_DOCUMENT
-            || !paths.insert(entry.path.clone())
-        {
-            return Err("manifest entry identity or family cardinality is invalid".into());
-        }
-        let relative_path = Path::new(&entry.path);
-        if relative_path.is_absolute()
-            || relative_path
-                .components()
-                .any(|component| !matches!(component, Component::Normal(_)))
-        {
-            return Err("manifest path is not a safe relative path".into());
-        }
-        let expected_prefix = format!("{}/", entry.split);
-        if !entry.path.starts_with(&expected_prefix) || !entry.path.ends_with(".md") {
-            return Err("manifest path does not match its split".into());
-        }
-        let document_path = root.join(relative_path);
+        let document_path = root.join(Path::new(&entry.path));
         let bytes = read_private_file(&document_path, 0o600)?;
         if digest_bytes(&bytes) != entry.sha256 {
             return Err(format!("SHA-256 mismatch for {}", entry.path).into());
@@ -371,27 +296,10 @@ fn validate_root(root: &Path) -> Result<ValidatedPacket, Box<dyn std::error::Err
         let mut reader = BufReader::new(bytes.as_slice());
         let mut header_line = String::new();
         reader.read_line(&mut header_line)?;
-        let header: DocumentHeader = serde_json::from_str(header_line.trim_end())?;
-        if canonical_bytes(&header)? != header_line.trim_end().as_bytes()
-            || header.schema != PACKET_SCHEMA
-            || header.state_slice != STATE_SLICE
-            || header.protocol_id != PROTOCOL_ID
-            || header.source != entry.source
-            || header.revision != entry.revision
-            || header.split != entry.split
-            || header.author != entry.author
-            || header.families != entry.families
-            || header.document_id != document_id_from_path(&entry.path)?
-            || header.fresh_nonce
-                != digest(&(
-                    PROTOCOL_ID,
-                    &header.split,
-                    document_index(&entry.path)?,
-                    &header.families,
-                ))?
-            || reader.lines().next().is_none()
-        {
-            return Err(format!("document header/body mismatch for {}", entry.path).into());
+        let header = DocumentHeader::from_canonical_line(header_line.trim_end().as_bytes())?;
+        header.validate_for_entry(entry)?;
+        if reader.lines().next().is_none() {
+            return Err(format!("document body is empty for {}", entry.path).into());
         }
         *documents_by_split.entry(entry.split.clone()).or_insert(0) += 1;
         let family_set = split_families.entry(entry.split.clone()).or_default();
@@ -498,21 +406,6 @@ fn freeze(root: &Path) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-fn document_id_from_path(path: &str) -> Result<String, Box<dyn std::error::Error>> {
-    let name = Path::new(path)
-        .file_stem()
-        .and_then(|value| value.to_str())
-        .ok_or("manifest path has no document ID")?;
-    Ok(name.into())
-}
-
-fn document_index(path: &str) -> Result<usize, Box<dyn std::error::Error>> {
-    let name = document_id_from_path(path)?;
-    let suffix = name.rsplit('-').next().ok_or("document ID has no index")?;
-    let index = suffix.parse::<usize>()?;
-    Ok(index.checked_sub(1).ok_or("document index starts at 1")?)
-}
-
 fn write_private(path: &Path, bytes: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
     let mut file = OpenOptions::new()
         .write(true)
@@ -567,6 +460,7 @@ fn set_mode(path: &Path, mode: u32) -> Result<(), Box<dyn std::error::Error>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use security_alignment_os::fresh_packet::document_index;
 
     #[test]
     fn generated_documents_are_unique_and_partitioned() {

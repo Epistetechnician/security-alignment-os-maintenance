@@ -71,6 +71,7 @@ JavaScript runtime dependencies are installed.
 | `adaptation` | Immutable-base shadow/canary controls, evaluator/policy/resource/prediction-lock binding, independent promotion, rollback, and terminal freeze |
 | `causal` | Preregistered causal-track identity, qualification-before-assessment ordering, held-out/prediction-lock binding, independent acceptance, and raw-trace exclusion |
 | `faults` | Deterministic replay, stale-clock, stale-policy, malformed-bytes, partial-write, and kill/freeze scenarios |
+| `fresh_packet` | Canonical fresh-packet manifest/header schema, exact 207-document split contract, and digest-only packet identity for downstream local consumers |
 
 ## Boundaries
 

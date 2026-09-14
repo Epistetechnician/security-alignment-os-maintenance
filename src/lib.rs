@@ -30,6 +30,7 @@ pub mod crypto_adapters;
 pub mod custody;
 pub mod execution_gate;
 pub mod faults;
+pub mod fresh_packet;
 pub mod governance;
 pub mod integration;
 pub mod market;

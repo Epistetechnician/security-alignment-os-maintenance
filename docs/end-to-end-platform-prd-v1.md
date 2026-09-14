@@ -385,9 +385,10 @@ append-only journal with an independent checker. Missing evidence is not
 inferred, ambiguous observations quarantine, and a matching observation never
 authorizes payout. The local V3 seam can verify a signed provider observation
 against a caller-owned revocable public-key registry before reconciliation, but
-that signature does not establish provider correctness or chain truth. Live
-chain reads, provider execution, independent settlement authority, disputes,
-and real value remain later gates.
+that signature does not establish provider correctness or chain truth. An
+independent local checker recomputes the observation binding and signature
+equation. Live chain reads, provider execution, independent settlement
+authority, disputes, and real value remain later gates.
 
 Exit claim: verifiable outsourced execution and settlement for the fixed job
 class, subject to the declared provider, chain, payment, and dispute limits.

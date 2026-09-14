@@ -273,6 +273,10 @@ fn signed_provider_observation_is_verified_before_reconciliation() {
             .expect("verified observation"),
         observation
     );
+    security_alignment_os::checker::validate_provider_observation_envelope(
+        &envelope, &keys, &intent,
+    )
+    .expect("independent provider observation check");
     let result = envelope
         .verify_and_reconcile(&keys, &intent)
         .expect("verified reconciliation");
@@ -284,6 +288,14 @@ fn signed_provider_observation_is_verified_before_reconciliation() {
     forged_signature.signature[0] ^= 1;
     assert!(matches!(
         forged_signature.verify(&keys, &intent),
+        Err(Error::Rejected(_))
+    ));
+    assert!(matches!(
+        security_alignment_os::checker::validate_provider_observation_envelope(
+            &forged_signature,
+            &keys,
+            &intent,
+        ),
         Err(Error::Rejected(_))
     ));
 

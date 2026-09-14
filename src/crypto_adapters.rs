@@ -1054,6 +1054,10 @@ impl ProviderKeyRegistry {
         Ok(())
     }
 
+    pub fn get(&self, key_id: &str) -> Option<&ProviderKeyRecord> {
+        self.records.get(key_id)
+    }
+
     fn verify(&self, key_id: &str, message: &[u8], signature: &[u8]) -> Result<()> {
         self.validate()?;
         let record = self

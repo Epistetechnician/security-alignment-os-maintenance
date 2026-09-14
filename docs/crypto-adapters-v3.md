@@ -34,9 +34,11 @@ duplicate-key rejection before a verifier consumes the envelope.
   identity binding to the frozen settlement intent.
 
 `verify_and_reconcile` performs that verification before invoking the existing
-zero-value reconciliation path. `NotFound` remains rejected and `Ambiguous`
-remains quarantined after successful signature verification. A valid signature
-does not authorize a payout.
+zero-value reconciliation path. `checker::validate_provider_observation_envelope`
+recomputes the same binding and signature equations through a separate checker
+path. `NotFound` remains rejected and `Ambiguous` remains quarantined after
+successful signature verification. A valid signature does not authorize a
+payout.
 
 ## Claim ceiling
 

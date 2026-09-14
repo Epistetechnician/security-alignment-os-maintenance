@@ -132,10 +132,12 @@ wallet, chain, zero-knowledge, FHE, or MPC workload runs.
 `ProviderKeyRegistry` and `ProviderObservationEnvelope` add a caller-owned
 public-key boundary before reconciliation. Canonical Ed25519 signatures,
 unknown-key rejection, terminal key revocation, observation-digest binding,
-and provider/beneficiary identity binding are checked locally. The helper
-`verify_and_reconcile` performs signature verification before the existing
-zero-value reconciliation; the key registry is not an authenticated trust root
-and the signature is not proof of provider correctness or chain state.
+and provider/beneficiary identity binding are checked locally. The helpers
+`verify_and_reconcile` and
+`checker::validate_provider_observation_envelope` verify the signature before
+the existing zero-value reconciliation through producer and independent paths;
+the key registry is not an authenticated trust root and the signature is not
+proof of provider correctness or chain state.
 
 `governance::ReleaseRegistry` preserves an immutable base and rollback target.
 Shadow and canary advances require the candidate's first evidence digest, then a

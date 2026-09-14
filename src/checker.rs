@@ -9,7 +9,10 @@
 use crate::audit::AuditJournal;
 use crate::broker::{BrokerJournal, TransactionStatus, JOURNAL_VERSION};
 use crate::contract::{Lifecycle, LifecycleState};
-use crate::crypto_adapters::{AdapterEventKind, CryptoJournal};
+use crate::crypto_adapters::{
+    AdapterEventKind, CryptoJournal, ObservationStatus, ProviderKeyRegistry,
+    ProviderObservationEnvelope, SettlementIntent,
+};
 use crate::market::{SumJob, SumReceipt};
 use crate::receipts::{CapabilityReceipt, ExecutionReceipt};
 use crate::{
@@ -684,6 +687,85 @@ pub fn validate_execution_receipt(
         &Signature::from_bytes(&signature_bytes),
     )
     .map_err(|_| Error::Rejected("independent execution signature check failed".into()))
+}
+
+/// Independently validates a signed provider observation envelope.
+/// This duplicates the envelope binding and Ed25519 verification instead of
+/// calling the producer verifier; it proves only local record consistency.
+pub fn validate_provider_observation_envelope(
+    envelope: &ProviderObservationEnvelope,
+    keys: &ProviderKeyRegistry,
+    intent: &SettlementIntent,
+) -> Result<()> {
+    let observation = &envelope.observation;
+    let transaction_shape_is_valid = match (&observation.status, &observation.transaction_digest) {
+        (ObservationStatus::Observed, Some(transaction_digest)) => valid_digest(transaction_digest),
+        (ObservationStatus::NotFound | ObservationStatus::Ambiguous, None) => true,
+        _ => false,
+    };
+    let expected_intent_digest = digest(intent)?;
+    if envelope.schema_version != 1
+        || envelope.state_slice != STATE_SLICE
+        || !valid_text(&envelope.provider_id)
+        || !valid_text(&envelope.key_id)
+        || observation.schema_version != 1
+        || observation.state_slice != STATE_SLICE
+        || !valid_text(&observation.observation_id)
+        || observation.adapter_revision.is_empty()
+        || observation.adapter_revision.chars().any(char::is_control)
+        || !valid_digest(&observation.intent_digest)
+        || !valid_text(&observation.payment_id)
+        || observation.chain_id == 0
+        || !valid_text(&observation.contract_address)
+        || !transaction_shape_is_valid
+        || observation.observed_amount != 0
+        || !valid_text(&observation.asset)
+        || !valid_text(&observation.beneficiary)
+        || !valid_digest(&envelope.observation_digest)
+        || envelope.observation_digest != digest(observation)?
+        || envelope.signature.len() != SIGNATURE_LEN
+        || envelope.provider_id != observation.beneficiary
+        || observation.intent_digest != expected_intent_digest
+        || observation.adapter != intent.adapter
+        || observation.adapter_revision != intent.adapter_revision
+        || observation.payment_id != intent.payment_id
+        || observation.chain_id != intent.chain_id
+        || observation.contract_address != intent.contract_address
+        || observation.asset != intent.asset
+        || observation.beneficiary != intent.beneficiary
+    {
+        return Err(Error::Rejected(
+            "independent provider observation binding check failed".into(),
+        ));
+    }
+    let record = keys
+        .get(&envelope.key_id)
+        .ok_or_else(|| Error::Rejected("independent provider key is not trusted".into()))?;
+    if record.revoked || record.key_id != envelope.key_id || record.public_key.len() != 32 {
+        return Err(Error::Rejected(
+            "independent provider key record is invalid or revoked".into(),
+        ));
+    }
+    let public_key: [u8; 32] = record
+        .public_key
+        .as_slice()
+        .try_into()
+        .map_err(|_| Error::Rejected("independent provider public key is invalid".into()))?;
+    let verifying_key = VerifyingKey::from_bytes(&public_key)
+        .map_err(|_| Error::Rejected("independent provider public key is invalid".into()))?;
+    let signature_bytes: [u8; SIGNATURE_LEN] = envelope
+        .signature
+        .as_slice()
+        .try_into()
+        .map_err(|_| Error::Rejected("independent provider signature is invalid".into()))?;
+    let mut unsigned = envelope.clone();
+    unsigned.signature.clear();
+    verifying_key
+        .verify(
+            &canonical_bytes(&unsigned)?,
+            &Signature::from_bytes(&signature_bytes),
+        )
+        .map_err(|_| Error::Rejected("independent provider signature check failed".into()))
 }
 
 /// Independently validates the crypto-adapter journal hash chain and terminal

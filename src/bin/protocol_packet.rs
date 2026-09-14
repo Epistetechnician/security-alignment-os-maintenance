@@ -563,3 +563,64 @@ fn set_mode(path: &Path, mode: u32) -> Result<(), Box<dyn std::error::Error>> {
     fs::set_permissions(path, permissions)?;
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn generated_documents_are_unique_and_partitioned() {
+        let mut document_digests = BTreeSet::new();
+        let mut family_ids = BTreeSet::new();
+
+        for (split_index, split) in ["fit", "tune", "assessment"].into_iter().enumerate() {
+            let mut split_families = BTreeSet::new();
+            for document_index in 0..DOCUMENTS_PER_SPLIT {
+                let first_family = document_index * FAMILIES_PER_DOCUMENT;
+                let families = (0..FAMILIES_PER_DOCUMENT)
+                    .map(|offset| format!("{split}-family-{:04}", first_family + offset + 1))
+                    .collect::<Vec<_>>();
+                let document_id = format!("{split}-{:03}", document_index + 1);
+                let bytes =
+                    document_bytes(split, split_index, document_index, &document_id, &families)
+                        .expect("document bytes");
+                assert!(document_digests.insert(digest_bytes(&bytes)));
+                for family in &families {
+                    assert!(split_families.insert(family.clone()));
+                    assert!(family_ids.insert(family.clone()));
+                }
+                let header_line = String::from_utf8(bytes)
+                    .expect("UTF-8 fixture")
+                    .lines()
+                    .next()
+                    .expect("header line")
+                    .to_owned();
+                let header: DocumentHeader =
+                    serde_json::from_str(&header_line).expect("canonical header");
+                assert_eq!(header.document_id, document_id);
+                assert_eq!(header.families.len(), FAMILIES_PER_DOCUMENT);
+                assert_eq!(header.fresh_nonce.len(), 64);
+            }
+            assert_eq!(split_families.len(), EXPECTED_FAMILIES_PER_SPLIT);
+        }
+
+        assert_eq!(document_digests.len(), EXPECTED_DOCUMENTS);
+        assert_eq!(family_ids.len(), EXPECTED_DOCUMENTS * FAMILIES_PER_DOCUMENT);
+    }
+
+    #[test]
+    fn malformed_document_index_fails_closed() {
+        assert!(document_index("fit/fit-000.md").is_err());
+        assert_eq!(document_index("fit/fit-001.md").expect("first index"), 0);
+    }
+
+    #[test]
+    fn evidence_write_is_idempotent_but_rejects_drift() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let path = directory.path().join("review.json");
+        let bytes = b"canonical-review";
+        write_private(&path, bytes).expect("first write");
+        write_private_or_verify(&path, bytes).expect("identical replay");
+        assert!(write_private_or_verify(&path, b"drifted-review").is_err());
+    }
+}

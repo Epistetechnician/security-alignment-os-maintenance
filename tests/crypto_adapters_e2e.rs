@@ -204,6 +204,18 @@ fn dry_run_adapter_replays_and_reconciles_without_authority() {
         forged_payout.validate(&intent, &resolution),
         Err(Error::Rejected(_))
     ));
+    let mut forged_resolution_digest = resolution.clone();
+    forged_resolution_digest.resolution_digest = digest(&"forged-resolution").expect("digest");
+    assert!(matches!(
+        PayoutProposal::from_resolution(&intent, &forged_resolution_digest),
+        Err(Error::Rejected(_))
+    ));
+    let mut forged_payout_digest = payout.clone();
+    forged_payout_digest.proposal_digest = digest(&"forged-payout").expect("digest");
+    assert!(matches!(
+        forged_payout_digest.validate(&intent, &resolution),
+        Err(Error::Rejected(_))
+    ));
 
     let mut journal = CryptoJournal::default();
     assert_eq!(

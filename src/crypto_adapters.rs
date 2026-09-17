@@ -1509,6 +1509,7 @@ impl SettlementResolution {
             || self.value_moved
             || self.claim_ceiling != CLAIM_CEILING
             || !valid_digest(&self.resolution_digest)
+            || self.resolution_digest != self.computed_digest()?
         {
             return Err(Error::Rejected(
                 "crypto settlement resolution shape violates the authorization boundary".into(),
@@ -1667,6 +1668,7 @@ impl PayoutProposal {
             || self.claim_ceiling != CLAIM_CEILING
             || !valid_digest(&self.request_digest)
             || !valid_digest(&self.proposal_digest)
+            || self.proposal_digest != self.computed_digest()?
         {
             return Err(Error::Rejected(
                 "crypto payout proposal shape violates the authorization boundary".into(),

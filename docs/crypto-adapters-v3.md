@@ -45,6 +45,8 @@ payout.
 Authorization-required resolutions and payout proposals recompute their stored
 digests during shape validation. Editing either digest without recomputing the
 canonical record is rejected before the proposal can enter the local journal.
+The append-only journal also rejects backward event timestamps and preserves
+its prior state if a new event fails final validation.
 
 ## Claim ceiling
 

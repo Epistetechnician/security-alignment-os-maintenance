@@ -1788,6 +1788,7 @@ impl CryptoJournal {
 
     pub fn validate(&self) -> Result<()> {
         let mut previous_event_digest = None;
+        let mut previous_recorded_at = None;
         let mut states = BTreeMap::new();
         let mut idempotency_keys = BTreeMap::new();
         let mut intent_keys = BTreeMap::new();
@@ -1800,6 +1801,7 @@ impl CryptoJournal {
                 || !valid_text(&event.idempotency_key)
                 || !valid_digest(&event.subject_digest)
                 || event.previous_event_digest != previous_event_digest
+                || previous_recorded_at.is_some_and(|previous| event.recorded_at < previous)
                 || !valid_digest(&event.event_digest)
                 || event.event_digest != event.computed_digest()?
             {
@@ -1842,6 +1844,7 @@ impl CryptoJournal {
             }
             states.insert(event.intent_digest.clone(), event.kind);
             previous_event_digest = Some(event.event_digest.clone());
+            previous_recorded_at = Some(event.recorded_at);
         }
         Ok(())
     }
@@ -2004,6 +2007,15 @@ impl CryptoJournal {
                 "crypto intent already has another idempotency key".into(),
             ));
         }
+        if self
+            .events
+            .last()
+            .is_some_and(|event| recorded_at < event.recorded_at)
+        {
+            return Err(Error::Rejected(
+                "crypto journal event time moves backward".into(),
+            ));
+        }
         let current = self
             .events
             .iter()
@@ -2029,7 +2041,10 @@ impl CryptoJournal {
         };
         event.event_digest = event.computed_digest()?;
         self.events.push(event);
-        self.validate()?;
+        if let Err(error) = self.validate() {
+            self.events.pop();
+            return Err(error);
+        }
         Ok(AppendDisposition::Appended)
     }
 

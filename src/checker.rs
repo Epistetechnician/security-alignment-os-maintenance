@@ -775,6 +775,7 @@ pub fn validate_provider_observation_envelope(
 /// `CryptoJournal::validate`; it proves only local record consistency.
 pub fn validate_crypto_journal(journal: &CryptoJournal) -> Result<()> {
     let mut previous_event_digest = None;
+    let mut previous_recorded_at = None;
     let mut states = BTreeMap::new();
     let mut intent_keys = BTreeMap::new();
     let mut idempotency_intents = BTreeMap::new();
@@ -787,6 +788,7 @@ pub fn validate_crypto_journal(journal: &CryptoJournal) -> Result<()> {
             || !valid_text(&event.idempotency_key)
             || !valid_digest(&event.subject_digest)
             || event.previous_event_digest != previous_event_digest
+            || previous_recorded_at.is_some_and(|previous| event.recorded_at < previous)
             || !valid_digest(&event.event_digest)
         {
             return Err(Error::Journal(
@@ -835,6 +837,7 @@ pub fn validate_crypto_journal(journal: &CryptoJournal) -> Result<()> {
         }
         states.insert(event.intent_digest.clone(), event.kind);
         previous_event_digest = Some(event.event_digest.clone());
+        previous_recorded_at = Some(event.recorded_at);
     }
     Ok(())
 }

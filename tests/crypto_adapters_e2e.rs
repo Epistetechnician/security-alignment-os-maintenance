@@ -248,6 +248,17 @@ fn dry_run_adapter_replays_and_reconciles_without_authority() {
     security_alignment_os::checker::validate_crypto_journal(&journal)
         .expect("independent journal check");
 
+    let mut backward_journal = CryptoJournal::default();
+    backward_journal
+        .append_proposed(&intent, 10)
+        .expect("backward journal proposal");
+    let event_count = backward_journal.events().len();
+    assert!(matches!(
+        backward_journal.append_prepared(&intent, &receipt, 9),
+        Err(Error::Rejected(_))
+    ));
+    assert_eq!(backward_journal.events().len(), event_count);
+
     assert_eq!(
         journal
             .append_proposed(&intent, 99)

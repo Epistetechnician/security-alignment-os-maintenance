@@ -32,6 +32,7 @@ cargo run --bin local_demo
 cargo run --bin capability_broker -- <socket> <workspace> <journal> <evidence.json> <capability_supervisor>
 cargo run --bin broker_adversarial_runner -- <socket> <request.json> <workspace> <capability_supervisor>
 cargo run --bin protocol_packet -- <generate|validate|dry-run|freeze> <external-custody-root>
+cargo run --bin replication_verify -- <packet.json> <signed-result.json> <signer-key-id> <public-key-hex>
 pnpm run lint
 ```
 
@@ -67,7 +68,7 @@ JavaScript runtime dependencies are installed.
 | `market` | Fixed local sum with job/input commitments, typed exact-offer receipts, result recomputation, binding/timeout/replay checks, and an authorization-required settlement proposal |
 | `crypto_adapters` | Registry-backed zero-value settlement eligibility, provider-shaped canonical wire envelopes with duplicate-key rejection, deterministic unsigned dry-run preparation, signed provider-observation verification with revocable caller-owned keys, exact observation reconciliation, authorization-required resolution and payout proposals, append-only hash-chained replay, idempotency, quarantine, and canonical recovery |
 | `governance` | Shadow/canary/local-release records with immutable base, phase evidence, lifecycle validation, and canonical persistence/recovery |
-| `replication` | Frozen digest-only replication packets, independently signed operator results, exact comparison, mismatch quarantine, and canonical recovery |
+| `replication` | Frozen digest-only replication packets, canonical signed-result persistence, a separate verifier process, exact comparison, mismatch quarantine, and recovery |
 | `adaptation` | Immutable-base shadow/canary controls, evaluator/policy/resource/prediction-lock binding, independent promotion, rollback, and terminal freeze |
 | `causal` | Preregistered causal-track identity, qualification-before-assessment ordering, held-out/prediction-lock binding, independent acceptance, and raw-trace exclusion |
 | `faults` | Deterministic replay, stale-clock, stale-policy, malformed-bytes, partial-write, and kill/freeze scenarios |

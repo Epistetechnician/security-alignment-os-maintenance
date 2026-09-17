@@ -313,6 +313,51 @@ pub struct SignedReplicationResult {
     pub signature: Vec<u8>,
 }
 
+impl SignedReplicationResult {
+    pub fn validate(&self) -> Result<()> {
+        self.result.validate()?;
+        if !valid_text(&self.signer_key_id) || self.signature.len() != SIGNATURE_LEN {
+            return Err(Error::Invalid(
+                "signed replication result identity or signature is malformed".into(),
+            ));
+        }
+        Ok(())
+    }
+
+    pub fn save(&self, path: &Path) -> Result<()> {
+        self.validate()?;
+        let temporary = path.with_extension("tmp");
+        fs::write(&temporary, canonical_bytes(self)?)?;
+        fs::rename(temporary, path)?;
+        Ok(())
+    }
+
+    pub fn load(path: &Path) -> Result<Self> {
+        let bytes = fs::read(path)?;
+        let signed: Self = serde_json::from_slice(&bytes)?;
+        if canonical_bytes(&signed)? != bytes {
+            return Err(Error::Journal(
+                "signed replication result is not canonical JSON".into(),
+            ));
+        }
+        signed.validate()?;
+        Ok(signed)
+    }
+
+    pub fn recover(path: &Path) -> Result<Self> {
+        match Self::load(path) {
+            Ok(result) => Ok(result),
+            Err(Error::Persistence(error)) if error.kind() == std::io::ErrorKind::NotFound => {
+                let temporary = path.with_extension("tmp");
+                let result = Self::load(&temporary)?;
+                fs::rename(temporary, path)?;
+                Ok(result)
+            }
+            Err(error) => Err(error),
+        }
+    }
+}
+
 /// Narrow signer for aggregate replication results. The private key never
 /// appears in serialized or debug output.
 pub struct ReplicationSigner {
@@ -349,11 +394,13 @@ impl ReplicationSigner {
             .sign(&canonical_bytes(&result)?)
             .to_bytes()
             .to_vec();
-        Ok(SignedReplicationResult {
+        let signed = SignedReplicationResult {
             result,
             signer_key_id: self.key_id.clone(),
             signature,
-        })
+        };
+        signed.validate()?;
+        Ok(signed)
     }
 }
 
@@ -362,11 +409,8 @@ pub fn verify_signed_result(
     expected_signer_key_id: &str,
     public_key: [u8; KEY_LEN],
 ) -> Result<()> {
-    signed.result.validate()?;
-    if !valid_text(expected_signer_key_id)
-        || signed.signer_key_id != expected_signer_key_id
-        || signed.signature.len() != SIGNATURE_LEN
-    {
+    signed.validate()?;
+    if !valid_text(expected_signer_key_id) || signed.signer_key_id != expected_signer_key_id {
         return Err(Error::Rejected(
             "replication signer identity or signature is invalid".into(),
         ));
@@ -509,6 +553,25 @@ mod tests {
         assert_eq!(
             FrozenReplicationPacket::recover(&path).expect("recover"),
             packet
+        );
+    }
+
+    #[test]
+    fn signed_result_persistence_is_canonical_and_recoverable() {
+        let packet = packet();
+        let signer =
+            ReplicationSigner::from_seed("replication-key-persistence", [9; 32]).expect("signer");
+        let signed = signer.sign(result(&packet)).expect("signed result");
+        let directory = tempfile::tempdir().expect("directory");
+        let path = directory.path().join("signed-result.json");
+        signed.save(&path).expect("save");
+        assert_eq!(SignedReplicationResult::load(&path).expect("load"), signed);
+        let bytes = std::fs::read(&path).expect("bytes");
+        std::fs::write(path.with_extension("tmp"), bytes).expect("temporary");
+        std::fs::remove_file(&path).expect("remove primary");
+        assert_eq!(
+            SignedReplicationResult::recover(&path).expect("recover"),
+            signed
         );
     }
 }

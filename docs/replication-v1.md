@@ -16,6 +16,15 @@ exact match to the frozen packet; any mismatch returns quarantine. The signer
 and host identifiers are caller-supplied assertions. They do not authenticate
 an operator, host, or independent scientific validator.
 
-Packets use canonical JSON with temporary-file recovery. This is a local
-handoff and comparison contract. It does not run the broker on another host,
-provide cross-host custody, or establish the phase-2 exit claim by itself.
+Packets and signed results use canonical JSON with temporary-file recovery.
+`replication_verify` loads both records in a separate local process, decodes
+the caller-provided pinned public key, verifies the Ed25519 signature, compares
+every frozen terminal/digest field, and exits non-zero on malformed, forged,
+or mismatched evidence. This makes the local handoff executable and replayable
+without granting the verifier authority to mutate the broker or workspace.
+
+This remains local process evidence. It does not run the broker on another
+host, provide cross-host custody, authenticate the operator or host, or
+establish the phase-2 exit claim by itself. A real phase-2 exit still requires
+a separate operator and host, reviewer-controlled signing-key custody, exact
+digest-bound signed receipts, and independently retained recovery evidence.

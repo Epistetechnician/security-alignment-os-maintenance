@@ -42,6 +42,10 @@ path. `NotFound` remains rejected and `Ambiguous` remains quarantined after
 successful signature verification. A valid signature does not authorize a
 payout.
 
+Authorization-required resolutions and payout proposals recompute their stored
+digests during shape validation. Editing either digest without recomputing the
+canonical record is rejected before the proposal can enter the local journal.
+
 ## Claim ceiling
 
 The implementation remains:

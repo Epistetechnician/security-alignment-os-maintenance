@@ -1726,7 +1726,9 @@ fn observation_identity_matches(
         && observation.chain_id == intent.chain_id
         && observation.contract_address == intent.contract_address
         && observation.asset == intent.asset
-        && observation.beneficiary == intent.beneficiary)
+        && observation.beneficiary == intent.beneficiary
+        && observation.observed_at >= intent.created_at
+        && observation.observed_at < intent.expires_at)
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]

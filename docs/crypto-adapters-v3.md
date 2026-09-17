@@ -31,7 +31,9 @@ duplicate-key rejection before a verifier consumes the envelope.
 - a valid Ed25519 signature over the canonical unsigned payload;
 - provider ID equal to the observation beneficiary; and
 - exact adapter, intent, payment, chain, contract, asset, and beneficiary
-  identity binding to the frozen settlement intent.
+  identity binding to the frozen settlement intent; and
+- an observation timestamp inside the settlement intent's inclusive/exclusive
+  `[created_at, expires_at)` window.
 
 `verify_and_reconcile` performs that verification before invoking the existing
 zero-value reconciliation path. `checker::validate_provider_observation_envelope`

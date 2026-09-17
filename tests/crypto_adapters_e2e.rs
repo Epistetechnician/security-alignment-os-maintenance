@@ -306,6 +306,30 @@ fn signed_provider_observation_is_verified_before_reconciliation() {
         Err(Error::Invalid(_))
     ));
 
+    let mut outside_window = envelope.clone();
+    outside_window.observation.observed_at = intent.expires_at;
+    outside_window.observation_digest = outside_window.observation.digest().expect("digest");
+    outside_window.signature = signing_key
+        .sign(
+            &outside_window
+                .signing_bytes()
+                .expect("outside-window signing bytes"),
+        )
+        .to_bytes()
+        .to_vec();
+    assert!(matches!(
+        outside_window.verify(&keys, &intent),
+        Err(Error::Quarantined(_))
+    ));
+    assert!(matches!(
+        security_alignment_os::checker::validate_provider_observation_envelope(
+            &outside_window,
+            &keys,
+            &intent,
+        ),
+        Err(Error::Rejected(_))
+    ));
+
     let mut revoked_keys = keys.clone();
     revoked_keys
         .revoke("provider-key-crypto-1")
@@ -445,6 +469,20 @@ fn mismatched_identity_and_nonzero_value_fail_closed() {
     mismatched_observation.payment_id = "other-payment".into();
     assert!(matches!(
         reconcile(&intent, &mismatched_observation),
+        Err(Error::Quarantined(_))
+    ));
+
+    let mut before_window = observation.clone();
+    before_window.observed_at = intent.created_at.saturating_sub(1);
+    assert!(matches!(
+        reconcile(&intent, &before_window),
+        Err(Error::Quarantined(_))
+    ));
+
+    let mut after_window = observation;
+    after_window.observed_at = intent.expires_at;
+    assert!(matches!(
+        reconcile(&intent, &after_window),
         Err(Error::Quarantined(_))
     ));
 

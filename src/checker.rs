@@ -733,6 +733,8 @@ pub fn validate_provider_observation_envelope(
         || observation.contract_address != intent.contract_address
         || observation.asset != intent.asset
         || observation.beneficiary != intent.beneficiary
+        || observation.observed_at < intent.created_at
+        || observation.observed_at >= intent.expires_at
     {
         return Err(Error::Rejected(
             "independent provider observation binding check failed".into(),

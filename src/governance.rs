@@ -2,10 +2,10 @@
 //!
 //! State slice: `security-alignment-os-foundation-v1`.
 
+use crate::persistence::{read_regular_snapshot, recover_atomic_snapshot, save_atomic_snapshot};
 use crate::{canonical_bytes, digest, valid_digest, Error, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
-use std::fs;
 use std::path::Path;
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -171,14 +171,11 @@ impl ReleaseRegistry {
 
     pub fn save(&self, path: &Path) -> Result<()> {
         self.validate()?;
-        let temporary = path.with_extension("tmp");
-        fs::write(&temporary, canonical_bytes(self)?)?;
-        fs::rename(temporary, path)?;
-        Ok(())
+        save_atomic_snapshot(path, &canonical_bytes(self)?, "release registry")
     }
 
     pub fn load(path: &Path) -> Result<Self> {
-        let bytes = fs::read(path)?;
+        let bytes = read_regular_snapshot(path)?;
         let registry: Self = serde_json::from_slice(&bytes)?;
         if canonical_bytes(&registry)? != bytes {
             return Err(Error::Journal(
@@ -190,16 +187,7 @@ impl ReleaseRegistry {
     }
 
     pub fn recover(path: &Path) -> Result<Self> {
-        match Self::load(path) {
-            Ok(registry) => Ok(registry),
-            Err(Error::Persistence(error)) if error.kind() == std::io::ErrorKind::NotFound => {
-                let temporary = path.with_extension("tmp");
-                let registry = Self::load(&temporary)?;
-                fs::rename(temporary, path)?;
-                Ok(registry)
-            }
-            Err(error) => Err(error),
-        }
+        recover_atomic_snapshot(path, "release registry", Self::load)
     }
 }
 

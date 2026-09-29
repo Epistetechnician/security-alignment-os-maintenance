@@ -6,6 +6,7 @@
 //! authenticate a host, prove that execution happened, or authorize a
 //! provider. Verification is intentionally caller-owned and in-memory.
 
+use crate::persistence::{read_regular_snapshot, recover_atomic_snapshot, save_atomic_snapshot};
 use crate::{
     canonical_bytes, digest, valid_digest, Action, Capability, Decision, DecisionKind, Error,
     Policy, Proposal, Result, STATE_SLICE,
@@ -14,7 +15,6 @@ use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
-use std::fs;
 use std::path::Path;
 
 const RECEIPT_VERSION: u8 = 1;
@@ -458,14 +458,15 @@ impl ReceiptVerifier {
 
     pub fn save(&self, path: &Path) -> Result<()> {
         self.validate()?;
-        let temporary = path.with_extension("tmp");
-        fs::write(&temporary, canonical_bytes(&self.document())?)?;
-        fs::rename(temporary, path)?;
-        Ok(())
+        save_atomic_snapshot(
+            path,
+            &canonical_bytes(&self.document())?,
+            "receipt verifier",
+        )
     }
 
     pub fn load(path: &Path) -> Result<Self> {
-        let bytes = fs::read(path)?;
+        let bytes = read_regular_snapshot(path)?;
         let document: VerifierDocument = serde_json::from_slice(&bytes)?;
         if document.version != VERIFIER_FORMAT_VERSION || canonical_bytes(&document)? != bytes {
             return Err(Error::Journal(
@@ -485,16 +486,7 @@ impl ReceiptVerifier {
     }
 
     pub fn recover(path: &Path) -> Result<Self> {
-        match Self::load(path) {
-            Ok(verifier) => Ok(verifier),
-            Err(Error::Persistence(error)) if error.kind() == std::io::ErrorKind::NotFound => {
-                let temporary = path.with_extension("tmp");
-                let verifier = Self::load(&temporary)?;
-                fs::rename(temporary, path)?;
-                Ok(verifier)
-            }
-            Err(error) => Err(error),
-        }
+        recover_atomic_snapshot(path, "receipt verifier", Self::load)
     }
 
     pub fn verified_count(&self) -> usize {

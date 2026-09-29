@@ -8,6 +8,7 @@
 //! is a separately spawned executable and is always invoked through a
 //! fail-closed platform sandbox backend.
 
+use crate::persistence::{read_regular_snapshot, recover_atomic_snapshot, save_atomic_snapshot};
 use crate::receipts::{CapabilityReceipt, ReceiptSigner};
 use crate::{
     canonical_bytes, digest, digest_bytes, Action, Claim, DecisionKind, Error, EvidenceRegistry,
@@ -453,7 +454,7 @@ impl BrokerJournal {
     }
 
     pub fn load(path: &Path) -> Result<Self> {
-        let bytes = fs::read(path)?;
+        let bytes = read_regular_snapshot(path)?;
         let journal: Self = serde_json::from_slice(&bytes)?;
         if canonical_bytes(&journal)? != bytes {
             return Err(Error::Journal(
@@ -466,23 +467,11 @@ impl BrokerJournal {
 
     pub fn save(&self, path: &Path) -> Result<()> {
         self.validate()?;
-        let temporary = path.with_extension("tmp");
-        fs::write(&temporary, canonical_bytes(self)?)?;
-        fs::rename(temporary, path)?;
-        Ok(())
+        save_atomic_snapshot(path, &canonical_bytes(self)?, "broker journal")
     }
 
     pub fn recover(path: &Path) -> Result<Self> {
-        match Self::load(path) {
-            Ok(journal) => Ok(journal),
-            Err(Error::Persistence(error)) if error.kind() == std::io::ErrorKind::NotFound => {
-                let temporary = path.with_extension("tmp");
-                let journal = Self::load(&temporary)?;
-                fs::rename(temporary, path)?;
-                Ok(journal)
-            }
-            Err(error) => Err(error),
-        }
+        recover_atomic_snapshot(path, "broker journal", Self::load)
     }
 }
 
@@ -508,6 +497,11 @@ pub struct Broker {
 }
 
 pub fn executable_digest(path: &Path) -> Result<String> {
+    if !fs::symlink_metadata(path)?.is_file() {
+        return Err(Error::Rejected(
+            "supervisor executable is not a regular file".into(),
+        ));
+    }
     Ok(digest_bytes(&fs::read(path)?))
 }
 
@@ -528,7 +522,7 @@ fn broker_policy() -> Policy {
 
 impl Broker {
     pub fn new(
-        config: BrokerConfig,
+        mut config: BrokerConfig,
         evidence: EvidenceRegistry,
         signer: ReceiptSigner,
     ) -> Result<Self> {
@@ -539,7 +533,17 @@ impl Broker {
                     "broker workspace is not a directory".into(),
                 ));
             }
-            let supervisor_digest = executable_digest(&config.supervisor_path)?;
+            let configured_supervisor_digest = executable_digest(&config.supervisor_path)?;
+            let canonical_supervisor_path = fs::canonicalize(&config.supervisor_path)?;
+            let supervisor_digest = executable_digest(&canonical_supervisor_path)?;
+            if supervisor_digest != configured_supervisor_digest {
+                return Err(Error::Rejected(
+                    "supervisor identity changed while resolving its path".into(),
+                ));
+            }
+            // Seatbelt matches the resolved executable path. Store that same
+            // path so symlinked parents cannot make the literal exec rule miss.
+            config.supervisor_path = canonical_supervisor_path;
             let mut journal = match BrokerJournal::recover(&config.journal_path) {
                 Ok(value) => value,
                 Err(Error::Persistence(error)) if error.kind() == std::io::ErrorKind::NotFound => {
@@ -880,6 +884,12 @@ impl Broker {
             .map_err(|_| "job_write_failed".to_owned())?;
         file.sync_all().map_err(|_| "job_sync_failed".to_owned())?;
         drop(file);
+        if executable_digest(&self.config.supervisor_path)
+            .map(|digest| digest != self.supervisor_digest)
+            .unwrap_or(true)
+        {
+            return Err("supervisor_identity_changed".into());
+        }
         let mut child = sandbox_command(
             &self.config.supervisor_path,
             job_path,

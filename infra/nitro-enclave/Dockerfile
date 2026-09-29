@@ -1,13 +1,16 @@
-# State slice: security-alignment-os-foundation-v1.
+# State slices: security-alignment-os-foundation-v1 and
+# maintenance-platform-runner-hermetic-e2e-v1.
 # This image is converted to a non-debug AWS Nitro Enclave EIF by the parent.
 FROM rust:1.87-bookworm
 
 WORKDIR /build
 ARG IMPLEMENTATION_REVISION
-ENV IMPLEMENTATION_REVISION=${IMPLEMENTATION_REVISION}
-COPY Cargo.toml Cargo.lock ./
+ARG SOURCE_TREE_SHA256
+COPY Cargo.toml Cargo.lock build.rs ./
+COPY build_support ./build_support
+COPY infra/nitro-enclave ./infra/nitro-enclave
 COPY src ./src
-RUN cargo build --release --locked \
+RUN NITRO_IMAGE_BUILD=1 cargo build --release --locked \
     --bin maintenance_broker \
     --bin maintenance_evaluator \
     --bin maintenance_replication_runner \

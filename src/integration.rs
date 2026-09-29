@@ -8,8 +8,10 @@
 
 use crate::receipts::{CapabilityReceipt, ReceiptVerifier};
 use crate::{
-    artifacts::ArtifactRegistry, contract, digest, DecisionKind, EvidenceRegistry, Kernel,
-    Proposal, Result, Runtime,
+    artifacts::ArtifactRegistry,
+    contract,
+    custody::{CustodyRegistry, LocalCustodyPaths},
+    digest, DecisionKind, EvidenceRegistry, Kernel, Proposal, Result, Runtime,
 };
 use serde::{Deserialize, Serialize};
 
@@ -42,6 +44,8 @@ pub struct EvidenceBinding<'a> {
     pub evidence_id: &'a str,
     pub artifacts: &'a ArtifactRegistry,
     pub artifact_id: &'a str,
+    pub custody: &'a CustodyRegistry,
+    pub custody_id: &'a str,
 }
 
 pub struct ReceiptBinding<'a> {
@@ -236,11 +240,7 @@ pub fn run_with_artifact(
 ) -> Result<WorkflowResult> {
     let subject_digest = proposal.digest()?;
     let observation_digest = digest(&observation)?;
-    if binding
-        .artifacts
-        .require_valid(binding.artifact_id, &proposal.source_digest, observation.at)
-        .is_err()
-    {
+    if !artifact_custody_is_valid(&binding, proposal, observation.at) {
         observe_failure(kernel, runtime, contract::FailureKind::Quarantine)?;
         return Ok(WorkflowResult {
             disposition: Disposition::Quarantined,
@@ -254,6 +254,120 @@ pub fn run_with_artifact(
         runtime,
         binding.evidence,
         binding.evidence_id,
+        proposal,
+        observation,
+    )
+}
+
+fn artifact_custody_is_valid(binding: &EvidenceBinding<'_>, proposal: &Proposal, now: u64) -> bool {
+    binding
+        .artifacts
+        .require_valid(binding.artifact_id, &proposal.source_digest, now)
+        .is_ok_and(|record| {
+            binding
+                .custody
+                .require_artifact(
+                    binding.custody_id,
+                    &record.manifest.custody_root,
+                    &record.manifest.subject_digest,
+                    now,
+                )
+                .is_ok()
+        })
+}
+
+fn local_artifact_custody_is_valid(
+    binding: &EvidenceBinding<'_>,
+    proposal: &Proposal,
+    now: u64,
+    paths: LocalCustodyPaths<'_>,
+) -> bool {
+    let Ok(artifact) =
+        binding
+            .artifacts
+            .require_valid(binding.artifact_id, &proposal.source_digest, now)
+    else {
+        return false;
+    };
+    binding
+        .custody
+        .verify_local_artifact(
+            binding.custody_id,
+            &artifact.manifest.custody_root,
+            &artifact.manifest.subject_digest,
+            now,
+            paths,
+        )
+        .is_ok()
+}
+
+/// Runs artifact, custody, evidence, receipt, and runtime checks in sequence.
+/// Artifact custody is checked before admission; the signed receipt is checked
+/// after admission but before capability consumption or runtime mutation.
+pub fn run_with_artifact_and_receipt(
+    kernel: &mut Kernel,
+    runtime: &mut Runtime,
+    binding: EvidenceBinding<'_>,
+    receipt_binding: ReceiptBinding<'_>,
+    proposal: &Proposal,
+    observation: Observation,
+) -> Result<WorkflowResult> {
+    let subject_digest = proposal.digest()?;
+    let observation_digest = digest(&observation)?;
+    if !artifact_custody_is_valid(&binding, proposal, observation.at) {
+        observe_failure(kernel, runtime, contract::FailureKind::Quarantine)?;
+        return Ok(WorkflowResult {
+            disposition: Disposition::Quarantined,
+            subject_digest,
+            decision_digest: None,
+            observation_digest,
+        });
+    }
+    run_with_receipt(
+        kernel,
+        runtime,
+        binding.evidence,
+        binding.evidence_id,
+        receipt_binding,
+        proposal,
+        observation,
+    )
+}
+
+/// Runs the composed workflow only after checking the manifest-bound local
+/// artifact bytes under the caller-supplied custody root.
+///
+/// This check is read-only and walks relative to open directory handles while
+/// rejecting symlinked path components. It checks filesystem ownership
+/// against this process's effective UID, but cannot authenticate the mapping
+/// from declared owner identity to that UID or prevent that UID from changing
+/// its own filesystem state. A failed local check quarantines before admission
+/// and leaves the receipt verifier untouched.
+pub fn run_with_local_artifact_and_receipt(
+    kernel: &mut Kernel,
+    runtime: &mut Runtime,
+    binding: EvidenceBinding<'_>,
+    receipt_binding: ReceiptBinding<'_>,
+    paths: LocalCustodyPaths<'_>,
+    proposal: &Proposal,
+    observation: Observation,
+) -> Result<WorkflowResult> {
+    let subject_digest = proposal.digest()?;
+    let observation_digest = digest(&observation)?;
+    if !local_artifact_custody_is_valid(&binding, proposal, observation.at, paths) {
+        observe_failure(kernel, runtime, contract::FailureKind::Quarantine)?;
+        return Ok(WorkflowResult {
+            disposition: Disposition::Quarantined,
+            subject_digest,
+            decision_digest: None,
+            observation_digest,
+        });
+    }
+    run_with_artifact_and_receipt(
+        kernel,
+        runtime,
+        binding,
+        receipt_binding,
         proposal,
         observation,
     )
@@ -514,6 +628,8 @@ mod tests {
                 evidence_id: "missing-evidence",
                 artifacts: &artifacts,
                 artifact_id: "missing-artifact",
+                custody: &crate::custody::CustodyRegistry::default(),
+                custody_id: "missing-custody",
             },
             &proposal(),
             Observation {

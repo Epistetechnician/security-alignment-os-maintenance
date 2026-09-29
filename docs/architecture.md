@@ -35,6 +35,19 @@ adds source, license, provenance, custody-root and retention fields around an
 exact subject digest. Acceptance is not semantic proof. It is a local governance
 transition that records who reviewed which exact bytes.
 
+When callers select the artifact-bound coordinator, it checks the accepted
+manifest against an active custody record by root ID, subject digest, and raw
+retention deadline before admission. The combined artifact-and-receipt entry
+point then verifies the signed capability receipt before consuming authority or
+mutating runtime state. Custody and reviewer identities remain local assertions.
+The local-artifact variant also hashes the manifest-bound file under a
+caller-supplied `0700` custody directory before admission. On Unix it walks
+path components relative to open directory handles without following
+symlinks, checks ownership against the process effective UID and private
+permissions, bounds and hashes the file, and detects metadata changes during
+the read. It does not map that UID to the declared owner or control same-UID
+filesystem mutations.
+
 ## Risk flow
 
 Admission receives only explicit exact-integer resource requests. Missing

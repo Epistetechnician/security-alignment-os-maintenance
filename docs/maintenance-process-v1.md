@@ -105,6 +105,11 @@ state paths, cancellation path, and evaluator timeout. `Request` contains the
 root Markdown path, exact before/after bytes and digests, checkout baseline
 digest, nonce, and lease expiry. The Rust integration fixture demonstrates
 provisioning with a synthetic test key; it is not a deployment key recipe.
+After writing the evaluator job, the broker rechecks that the evaluator path is
+a private regular file and that its digest still matches both the configured
+digest and the digest captured for the request. A detected replacement is
+quarantined before process creation. Path-based validation still has a same-UID
+race between the final read and OS process creation.
 
 Invoke `maintenance_broker CONFIG.json REQUEST.json`. It emits a JSON terminal
 outcome, or exits unsuccessfully on infrastructure or recovery errors. Treat

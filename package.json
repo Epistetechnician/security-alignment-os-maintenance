@@ -4,8 +4,12 @@
   "scripts": {
     "lint:fast": "cargo fmt --all -- --check",
     "test:focused": "cargo test --all-targets",
+    "build:nitro-identity": "cargo run --locked --bin nitro_image_build_identity",
+    "test:thesis": "cargo test --test maintenance_platform_runners_e2e --test nitro_enclave_image_policy --test security_thesis_e2e --test local_demo_e2e --test market_e2e --test routing_e2e --bin maintenance_confidential_space_runner --bin maintenance_nitro_enclave_runner",
+    "test:e2e": "cargo test --test adaptation_e2e --test broker_e2e --test confidential_space_image_policy --test local_demo_e2e --test maintenance_platform_runners_e2e --test nitro_enclave_image_policy --test maintenance_process_e2e --test maintenance_replication --test maintenance_replication_runner --test maintenance_reproducibility --test market_e2e --test routing_e2e --test security_thesis_e2e --bin maintenance_confidential_space_runner --bin maintenance_nitro_enclave_runner",
     "test:broker": "cargo test --test broker_e2e -- --nocapture",
-    "verify:contracts": "cargo clippy --all-targets -- -D warnings",
+    "verify:contract-digest": "shasum -a 256 -c docs/build-contract-v1.sha256",
+    "verify:contracts": "pnpm run verify:contract-digest && cargo clippy --all-targets -- -D warnings",
     "verify:full": "pnpm run lint:fast && pnpm run test:focused && pnpm run verify:contracts",
     "lint": "pnpm run verify:full"
   }

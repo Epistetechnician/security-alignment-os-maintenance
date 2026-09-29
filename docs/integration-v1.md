@@ -2,11 +2,19 @@
 
 State slice: `security-alignment-os-foundation-v1`.
 
-The build uses the 840 architecture, 841 parallel plan and 842 reference map in
-composed-zk-benchmark-os as design inputs. It extends this repository's Rust
-implementation. Consulted source revisions and exact working bytes are
+The local core uses the 840 architecture, 841 parallel plan and 842 reference
+map in composed-zk-benchmark-os as design inputs. It extends this repository's
+Rust implementation. Consulted source revisions and exact working bytes are
 recorded in `source-intake-v1.json`. No external code or scientific data was
-copied. The implementation has no third-party runtime services.
+copied. The local core needs no third-party runtime service. Separate hosted
+Confidential Space and Nitro runner binaries use their platform attestation
+interfaces when launched in those environments. Hermetic local tests execute
+the workload functions with the actual local runner, broker, and evaluator
+binaries, using synthetic protocol and attestation adapters. They do not call
+platform attestation. Nitro image-policy tests bind the clean Git revision to a
+digest of the exact image source inputs, check that the Docker build verifies
+and embeds both, and reject runtime identity overrides. They do not build an
+image.
 
 ## Implemented local path
 
@@ -46,34 +54,95 @@ current policy, and only then calls the same execution/observation path. A
 receipt failure transitions the admitted lifecycle to `Quarantined` and returns
 `Quarantined` with no runtime state or audit mutation.
 
+`integration::run_with_artifact` requires an accepted artifact whose subject
+matches the proposal source digest, then checks a `CustodyRegistry` record
+against that artifact's root ID, subject digest, and live raw-retention interval
+before admission. Missing, deleted, expired, root-mismatched, or
+digest-mismatched custody quarantines before admission or runtime mutation.
+These are caller-owned local assertions; the check does not authenticate the
+owner, inspect a filesystem, or perform deletion.
+
+`integration::run_with_artifact_and_receipt` composes that pre-admission gate
+with the receipt path: custody is checked first, evidence and policy are checked
+at admission, the signed capability receipt is verified before capability
+consumption, and execution then uses the same rollback and audit path. A
+custody rejection leaves both admission and receipt-verifier state untouched.
+
+`integration::run_with_local_artifact_and_receipt` adds a caller-supplied local
+custody root and relative artifact path. It verifies the accepted artifact's
+manifest root ID and subject digest against the custody record, then checks
+the exact file bytes, Unix permissions, path components, and byte limit before
+delegating to the artifact-and-receipt workflow. A failed local check
+quarantines before admission and receipt verification; the same receipt remains
+usable if the caller corrects the artifact and retries. This is a read-only
+same-process filesystem check. On Unix, it opens path components relative to
+verified directory handles with symlink following disabled and pins the opened
+file identity through its handle. It checks filesystem ownership against the
+process's effective UID, but does not map that UID to the declared owner or
+prevent a process running under that UID from changing filesystem state before
+the check. See
+[custody-v1.md](custody-v1.md) for its full contract and limits.
+
 `cargo run --bin local_demo` exercises this path with a fixed local proposal
 and prints only the workflow disposition and digests.
 
 ## Durable local surfaces
 
 `memory::PersistentMemory` stores canonical JSON records under a caller-selected
-path. Each write, read, and delete requires an active consent grant, a matching
-registered specialist, and a resource scope. The file stores value digests and
-grant IDs; grants must be reconstructed after restart. The file is plaintext and
-caller-owned, and deletion is logical deletion rather than secure erasure.
+path. Each write, read, and delete requires an active grant from the shared
+`ConsentRegistry`, a matching registered specialist, and a resource scope. The
+memory file stores value digests and grant IDs. Open persistent consent state
+with `ConsentRegistry::open`; grant and revoke changes reload the latest
+canonical snapshot and persist under a local owner-only single-writer lock.
+Each `TenantRetrieval` and `PersistentMemory` consent check holds that same lock
+through its read or write effect, so a competing revocation waits for an
+already-authorized effect to finish and blocks later effects. `ConsentRegistry::save`
+is limited to creating an initial snapshot from an in-memory registry; it
+cannot overwrite an existing snapshot. The lock fails closed when left behind
+by a crashed writer, and an operator must verify no writer is live before
+removing it. Persistent memory uses its own per-file lock for each gated read,
+write, and delete, and also for `save`; each operation reloads the latest
+snapshot while holding that lock. This preserves concurrent cooperating writers across stale handles and
+processes. `save` persists and refreshes the latest snapshot; `len` and
+`is_empty` expose the handle's last loaded view. Neither file authenticates its
+author or prevents rollback to older valid consent bytes. Memory is plaintext
+and caller-owned. Memory snapshots are owner-only on Unix, reject
+symlinks and broader permissions, and use a synced temporary file plus
+parent-directory sync before writes return. Open/recover promotes a validated
+pending memory snapshot even when a primary exists. Deletion is logical rather
+than secure erasure.
 
-`audit::AuditJournal` provides the corresponding caller-owned audit snapshot. It
-hashes event metadata and state digests into a canonical chain, validates the
-chain and canonical bytes on load, supports temporary-snapshot recovery when
-the primary is absent, and uses atomic replacement for a selected destination.
-It does not provide authenticated authorship or cross-process append locking.
+`ReplayJournal`, `KernelSnapshot`, `RuntimeSnapshot`, `audit::AuditJournal`,
+`EvidenceRegistry`, `alignment::PredictionLock`, `artifacts::ArtifactRegistry`,
+`broker::BrokerJournal`, `contract::FailureBudgetTracker`,
+`custody::CustodyRegistry`, `governance::ReleaseRegistry`, both receipt
+verifiers, `schema::SchemaRegistry`, `specialist::SpecialistRegistry`, and
+`specialist::ToolRegistry` use the shared local persistence helper. Each save
+takes a per-path writer lock, creates an exclusive temporary file, syncs its
+bytes, atomically replaces the snapshot, and syncs the parent directory. New
+files and lock files are mode 0600 on Unix. Recovery takes the same lock,
+validates a pending regular file, and promotes it even when a primary exists.
+Snapshot loads reject symlink or non-regular primary paths; pending symlinks
+are also rejected. An unresolved temporary file blocks a new save until
+recovery handles it. These APIs replace complete snapshots: the lock
+serializes file replacement, but stale in-memory values do not merge and the
+last completed save selects the contents. `AuditJournal` additionally hashes
+event metadata and state digests into a canonical chain. This local plumbing
+does not provide cross-process append semantics, authenticated authorship, or
+rollback protection.
 
-`artifacts::ArtifactRegistry` has the same canonical persistence boundary for
-manifest lifecycle records. `validate` rejects inconsistent status,
-timestamp, role, and manifest bindings before `save` or after `load`;
-`recover` promotes only a valid temporary snapshot when the primary is absent.
-This is persistence validation, not proof of external custody or deletion.
+`artifacts::ArtifactRegistry` validates manifest lifecycle records, including
+status, timestamp, role, and manifest bindings. Its snapshot recovery follows
+the shared locked pending-file rules. This is persistence validation, not proof
+of external custody or deletion.
 
 `custody::CustodyRegistry` records an owner-declared external `0700` root,
 bounded raw-retention interval, exact artifact digest, validator assertion, and
-terminal owner deletion record. `claims::ClaimEnvelope` composes evidence by
-meet only, while `AggregateReleasePacket` retains claim IDs and evidence
-digests without raw payloads. Both remain caller-owned local records.
+terminal owner deletion record. The artifact-bound workflow checks the
+declared root ID, digest, and logical retention interval before admission.
+`claims::ClaimEnvelope` composes evidence by meet only, while
+`AggregateReleasePacket` retains claim IDs and evidence digests without raw
+payloads. Both remain caller-owned local records.
 
 `checker` independently recomputes replay, audit and fixed-receipt invariants
 for local regression. Its result is not independent acceptance evidence.
@@ -100,14 +169,18 @@ authenticate the host or make the signer independent.
 the exact input commitment, output schema, ordinary receipt type, privacy
 requirement, price ceiling, deadline, and immutable program identity. Typed
 `SumOffer` records bind to the exact job digest, fixed runtime and result
-commitment; selection is deterministic by price, provider, and offer ID, while
-duplicate eligible offer IDs quarantine the job.
+commitment. Selection validates every supplied offer against that job before
+choosing by price, provider, and offer ID; one malformed or cross-job offer
+rejects the candidate set, and duplicate eligible offer IDs quarantine it.
+Well-formed expired offers are excluded from selection.
 `SumReceipt` carries the selected offer ID and runtime digest. A separate
 verifier recomputes the result, checks program/input/time/price/status bindings,
 rejects a repeated receipt digest, and permits one typed
 `SettlementProposal` only after local verification. Direct local receipts use
 the explicit `local-direct-v1` offer ID; offer-backed settlement requires the
-exact offer ID, provider, price, and runtime digest. The proposal remains
+exact offer ID, provider, price, and runtime digest, with completion time
+inside the offer's submitted/expires interval. The proposal may be created
+after offer expiry while the job remains live. It remains
 `AuthorizationRequired`; no payment path exists. The verifier's
 verified/reserved sets support canonical caller-owned save/load/recovery. No
 provider, wallet, chain, zero-knowledge, FHE, or MPC workload runs.
@@ -119,11 +192,20 @@ does not deploy an adapter or authorize an external executor. Registry
 snapshots validate candidate identity, phase evidence cardinality, and
 canonical bytes before save/load/recovery.
 
-`specialist::SpecialistRegistry` and `specialist::ToolRegistry` bind immutable
-identity snapshots with canonical persistence/recovery. The tool registry
-binds tool ID/version, implementation digest and a
+`specialist::SpecialistRegistry` and `specialist::ToolRegistry` use the shared
+locked snapshot path. `specialist::ConsentRegistry` uses its purpose-specific
+lock-held update path because gated routing, retrieval, and memory operations
+must hold the consent lock through their effect. `ConsentRegistry::open`
+recovers the current snapshot, and later grant/revoke operations persist while
+holding that lock. Consent revocation creates a terminal grant-ID tombstone; a
+new issuance has a new digest-bound ID. The registry is shared by routing,
+local retrieval, and `PersistentMemory`, so each access rechecks the same
+active-grant record. Consent bytes remain plaintext, unauthenticated, and
+rollbackable. The tool registry binds tool ID/version, implementation digest and a
 canonical manifest-list digest, supports exact invocable lookup, terminal
-revocation, and canonical persistence. `adapters::AdapterPlan` validates the
+revocation, and canonical persistence. `TenantRetrieval` stores local records
+and checks the shared consent registry on retrieval.
+`adapters::AdapterPlan` validates the
 shape of an external sandbox/invocation request but rejects external execution
 authorization in this foundation slice. `execution_gate::ExecutionGate`
 validates a typed sandbox attestation and external job request, then returns a
@@ -137,11 +219,13 @@ same-process foundation. It accepts one typed file transformation over a
 binds evidence, executable digest, input digest, scope, quotas, expiry, and
 nonce into a durable transaction, and invokes the separate
 `capability_supervisor` only after journaling admission and consuming the
-single-use kernel capability. The supervisor clears its environment, denies
-network access, requires a broker-generated launch token, stages output, and
-atomically commits only after source and output validation. A timeout, failed
-containment, malformed telemetry, or crash recovery freezes the broker; an
-in-flight journal record is quarantined and cannot recreate authority.
+single-use kernel capability. The broker rechecks the supervisor's regular-file
+digest immediately before launch and rejects symlinks. The supervisor clears
+its environment, denies network access, requires a broker-generated launch
+token, stages output, and atomically commits only after source and output
+validation. A timeout, failed containment, malformed telemetry, or crash
+recovery freezes the broker; an in-flight journal record is quarantined and
+cannot recreate authority.
 
 `broker_adversarial_runner` and `tests/broker_e2e.rs` provide separate hostile
 client and real-process checks. They establish local evidence for authorized

@@ -752,6 +752,14 @@ fn invoke_evaluator(
     let _job_cleanup = FileCleanup {
         path: job_path.clone(),
     };
+    test_pause("pause-before-evaluator-launch", 250);
+    private_owned(&config.evaluator_path, false)?;
+    let launch_digest = digest_bytes(&fs::read(&config.evaluator_path)?);
+    if launch_digest != executable_digest || launch_digest != config.evaluator_executable_digest {
+        return Err(Error::Rejected(
+            "evaluator executable changed before launch".into(),
+        ));
+    }
     let job_file = File::open(&job_path)?;
     let mut child = Command::new(&config.evaluator_path)
         .arg("--seed-path")

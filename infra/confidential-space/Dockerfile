@@ -23,5 +23,5 @@ USER replication
 # These are the only operator-controlled launch inputs used by the workload.
 # The launcher rejects metadata overrides unless the image author allows them.
 LABEL "tee.launch_policy.allow_env_override"="IMPLEMENTATION_REVISION"
-LABEL "tee.launch_policy.log_redirect"="always"
+LABEL "tee.launch_policy.log_redirect"="never"
 ENTRYPOINT ["/opt/maintenance/bin/maintenance_confidential_space_runner"]

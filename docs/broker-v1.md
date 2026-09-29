@@ -6,10 +6,13 @@ This slice is the first process-enforced execution path. An agent sends one
 typed `FileTransformRequest` over a `0600` Unix-domain socket. The broker
 loads evidence, recomputes the proposal digest, checks the exact supervisor
 binary digest, admits the proposal through the existing kernel, and issues a
-single-use Ed25519 capability receipt. The private signing key is generated
-inside the broker process and is never accepted from or returned to the
-client. The client receives only the public issuer key in `Hello` and the
-receipt after admission.
+single-use Ed25519 capability receipt. The configured supervisor must be a
+regular non-symlink file. Its digest is checked again immediately before each
+launch; a changed binary rolls back and freezes the broker before process
+creation. The final path lookup is still subject to same-UID filesystem races.
+The private signing key is generated inside the broker process and is never
+accepted from or returned to the client. The client receives only the public
+issuer key in `Hello` and the receipt after admission.
 
 The only operation is `UppercaseAscii` over one regular source file in the
 canonical broker workspace. Source and destination paths must be relative,
@@ -37,14 +40,19 @@ admission. On macOS the backend uses `/usr/bin/sandbox-exec` with network and
 file-write denial plus an exact supervisor executable allowance. On Linux it
 uses an unprivileged user, network, and PID namespace through `unshare`; if
 that primitive is unavailable the request fails closed.
+The broker resolves the configured supervisor to a canonical absolute path
+before pinning and launching it, so Seatbelt's literal process-execution rule
+matches the path macOS resolves through parent-directory aliases. A final
+executable symlink remains rejected.
 
 `broker_adversarial_runner` is a separate Rust client. It checks direct
 supervisor invocation without a launch token, path escape, replay, forged
 receipt signature, malformed child-operation input, and missing-telemetry
 freeze. `tests/broker_e2e.rs` starts real broker and supervisor processes and
 checks successful transformation, unchanged source bytes, receipt forgery
-rejection, replay rejection, freeze behavior, and crash recovery from an
-`Executing` journal record.
+rejection, replay rejection, supervisor replacement and symlink rejection,
+symlinked-parent launch, freeze behavior, and crash recovery from an `Executing`
+journal record.
 
 This is local enforcement evidence for one operation on the supported host.
 It does not establish authenticated host identity, protection from a hostile

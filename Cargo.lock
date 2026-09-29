@@ -347,6 +347,7 @@ dependencies = [
  "aws-nitro-enclaves-nsm-api",
  "ed25519-dalek",
  "libc",
+ "rustix",
  "serde",
  "serde_bytes",
  "serde_json",

@@ -9,8 +9,9 @@ use security_alignment_os::broker::{
 use security_alignment_os::canonical_bytes;
 use security_alignment_os::{digest_bytes, Evidence, EvidenceRegistry};
 use std::fs;
+use std::io::Read;
 use std::path::Path;
-use std::process::{Child, Command};
+use std::process::{Child, Command, Stdio};
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tempfile::TempDir;
@@ -129,21 +130,32 @@ fn start_broker(
         evidence.as_os_str(),
         supervisor.as_os_str(),
     ]);
+    command.stderr(Stdio::piped());
     if kill_after_executing {
         command.env("BROKER_KILL_AFTER_EXECUTING", "1");
     }
-    let child = command.spawn().expect("broker spawn");
+    let mut child = command.spawn().expect("broker spawn");
     let client = BrokerClient::new(socket);
     for _ in 0..200 {
         if client.hello().is_ok() {
             return (child, client);
         }
+        if let Some(status) = child.try_wait().expect("broker startup status") {
+            let mut stderr = String::new();
+            if let Some(mut output) = child.stderr.take() {
+                let _ = output.read_to_string(&mut stderr);
+            }
+            panic!("broker exited before IPC hello ({status}): {stderr}");
+        }
         thread::sleep(Duration::from_millis(10));
     }
-    let mut child = child;
     let _ = child.kill();
     let _ = child.wait();
-    panic!("broker did not accept IPC hello");
+    let mut stderr = String::new();
+    if let Some(mut output) = child.stderr.take() {
+        let _ = output.read_to_string(&mut stderr);
+    }
+    panic!("broker did not accept IPC hello before timeout: {stderr}");
 }
 
 #[test]
@@ -216,6 +228,70 @@ fn broker_process_commits_authorized_transform_and_rejects_replay() {
     }
     let _ = child.kill();
     let _ = child.wait();
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn broker_launches_supervisor_through_a_symlinked_parent_path() {
+    let directory = tempfile::tempdir().expect("tempdir");
+    let source = directory.path().join("source.txt");
+    let input = b"Canonical supervisor path\n";
+    fs::write(&source, input).expect("source");
+
+    let built_supervisor = Path::new(env!("CARGO_BIN_EXE_capability_supervisor"));
+    let supervisor_dir = directory.path().join("supervisor-bin");
+    std::os::unix::fs::symlink(
+        built_supervisor.parent().expect("binary directory"),
+        &supervisor_dir,
+    )
+    .expect("symlink supervisor directory");
+    let supervisor = supervisor_dir.join(built_supervisor.file_name().expect("binary name"));
+    let authorized = request(&supervisor, input, 41, true);
+    let registry = registry_for(std::slice::from_ref(&authorized));
+    let (mut broker, client) = start_broker(&directory, &registry, &supervisor, false);
+
+    match client.request(BrokerRequest::Execute(Box::new(authorized))) {
+        Ok(BrokerResponse::Completed { .. }) => {}
+        other => panic!("unexpected symlinked-parent supervisor response: {other:?}"),
+    }
+    assert_eq!(fs::read(&source).expect("source read"), input);
+    assert_eq!(
+        fs::read(directory.path().join("output-41.txt")).expect("output"),
+        b"CANONICAL SUPERVISOR PATH\n"
+    );
+    let _ = broker.kill();
+    let _ = broker.wait();
+}
+
+#[test]
+fn broker_rejects_supervisor_replacement_after_startup() {
+    let directory = tempfile::tempdir().expect("tempdir");
+    let source = directory.path().join("source.txt");
+    let input = b"Pinned supervisor\n";
+    fs::write(&source, input).expect("source");
+    let supervisor = directory.path().join("pinned-supervisor");
+    fs::copy(env!("CARGO_BIN_EXE_capability_supervisor"), &supervisor).expect("copy supervisor");
+    #[cfg(unix)]
+    {
+        let supervisor_link = directory.path().join("supervisor-link");
+        std::os::unix::fs::symlink(&supervisor, &supervisor_link).expect("link supervisor");
+        assert!(executable_digest(&supervisor_link).is_err());
+    }
+    let authorized = request(&supervisor, input, 31, true);
+    let registry = registry_for(std::slice::from_ref(&authorized));
+    let (mut broker, client) = start_broker(&directory, &registry, &supervisor, false);
+
+    fs::write(&supervisor, b"replaced supervisor bytes").expect("replace supervisor");
+    match client.request(BrokerRequest::Execute(Box::new(authorized))) {
+        Ok(BrokerResponse::Quarantined { code, .. }) => {
+            assert_eq!(code, "supervisor_identity_changed");
+        }
+        other => panic!("unexpected supervisor replacement response: {other:?}"),
+    }
+    assert_eq!(fs::read(&source).expect("source read"), input);
+    assert!(!directory.path().join("output-31.txt").exists());
+    let _ = broker.kill();
+    let _ = broker.wait();
 }
 
 #[test]

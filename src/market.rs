@@ -2,10 +2,10 @@
 //!
 //! State slice: `security-alignment-os-foundation-v1`.
 
+use crate::persistence::{read_regular_snapshot, recover_atomic_snapshot, save_atomic_snapshot};
 use crate::{digest, valid_digest, Error, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
-use std::fs;
 use std::path::Path;
 
 const VERIFIER_FORMAT_VERSION: u8 = 1;
@@ -253,7 +253,8 @@ pub fn select_offer<'a>(job: &SumJob, offers: &'a [SumOffer], now: u64) -> Resul
     let mut eligible = Vec::new();
     let mut offer_ids = BTreeSet::new();
     for offer in offers {
-        if offer.validate(job, now).is_ok() && now < offer.expires_at {
+        offer.validate(job, now)?;
+        if now < offer.expires_at {
             if !offer_ids.insert(offer.offer_id.clone()) {
                 return Err(Error::Quarantined(
                     "duplicate eligible offer identity".into(),
@@ -373,14 +374,15 @@ impl ReceiptVerifier {
 
     pub fn save(&self, path: &Path) -> Result<()> {
         self.validate()?;
-        let temporary = path.with_extension("tmp");
-        fs::write(&temporary, crate::canonical_bytes(&self.document())?)?;
-        fs::rename(temporary, path)?;
-        Ok(())
+        save_atomic_snapshot(
+            path,
+            &crate::canonical_bytes(&self.document())?,
+            "market receipt verifier",
+        )
     }
 
     pub fn load(path: &Path) -> Result<Self> {
-        let bytes = fs::read(path)?;
+        let bytes = read_regular_snapshot(path)?;
         let document: VerifierDocument = serde_json::from_slice(&bytes)?;
         if document.version != VERIFIER_FORMAT_VERSION
             || crate::canonical_bytes(&document)? != bytes
@@ -398,16 +400,7 @@ impl ReceiptVerifier {
     }
 
     pub fn recover(path: &Path) -> Result<Self> {
-        match Self::load(path) {
-            Ok(verifier) => Ok(verifier),
-            Err(Error::Persistence(error)) if error.kind() == std::io::ErrorKind::NotFound => {
-                let temporary = path.with_extension("tmp");
-                let verifier = Self::load(&temporary)?;
-                fs::rename(temporary, path)?;
-                Ok(verifier)
-            }
-            Err(error) => Err(error),
-        }
+        recover_atomic_snapshot(path, "market receipt verifier", Self::load)
     }
 
     pub fn verify(&mut self, job: &SumJob, receipt: &SumReceipt, now: u64) -> Result<bool> {
@@ -439,12 +432,14 @@ impl ReceiptVerifier {
     ) -> Result<SettlementProposal> {
         offer.validate(job, now)?;
         if receipt.offer_id != offer.offer_id
+            || receipt.completed_at < offer.submitted_at
+            || receipt.completed_at >= offer.expires_at
             || receipt.provider != offer.provider
             || receipt.price != offer.price
             || receipt.runtime_digest != offer.runtime_digest
         {
             return Err(Error::Rejected(
-                "receipt does not bind the selected offer".into(),
+                "receipt does not bind the selected offer or completion window".into(),
             ));
         }
         self.propose_settlement_inner(job, receipt, now)

@@ -2,9 +2,9 @@
 //!
 //! State slice: `security-alignment-os-foundation-v1`.
 
+use crate::persistence::{read_regular_snapshot, recover_atomic_snapshot, save_atomic_snapshot};
 use crate::{canonical_bytes, digest, digest_bytes, valid_digest, Error, Result};
 use serde::{Deserialize, Serialize};
-use std::fs;
 use std::path::Path;
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -81,14 +81,11 @@ impl PredictionLock {
 
     pub fn save(&self, path: &Path) -> Result<()> {
         self.validate()?;
-        let temporary = path.with_extension("tmp");
-        fs::write(&temporary, canonical_bytes(self)?)?;
-        fs::rename(temporary, path)?;
-        Ok(())
+        save_atomic_snapshot(path, &canonical_bytes(self)?, "prediction lock")
     }
 
     pub fn load(path: &Path) -> Result<Self> {
-        let bytes = fs::read(path)?;
+        let bytes = read_regular_snapshot(path)?;
         let lock: Self = serde_json::from_slice(&bytes)?;
         if canonical_bytes(&lock)? != bytes {
             return Err(Error::Journal(
@@ -100,16 +97,7 @@ impl PredictionLock {
     }
 
     pub fn recover(path: &Path) -> Result<Self> {
-        match Self::load(path) {
-            Ok(lock) => Ok(lock),
-            Err(Error::Persistence(error)) if error.kind() == std::io::ErrorKind::NotFound => {
-                let temporary = path.with_extension("tmp");
-                let lock = Self::load(&temporary)?;
-                fs::rename(temporary, path)?;
-                Ok(lock)
-            }
-            Err(error) => Err(error),
-        }
+        recover_atomic_snapshot(path, "prediction lock", Self::load)
     }
 }
 

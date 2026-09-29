@@ -2,10 +2,10 @@
 //!
 //! State slice: `security-alignment-os-foundation-v1`.
 
+use crate::persistence::{read_regular_snapshot, recover_atomic_snapshot, save_atomic_snapshot};
 use crate::{canonical_bytes, digest, valid_digest, Error, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
-use std::fs;
 use std::path::Path;
 
 const MAX_METADATA_FIELDS: usize = 8;
@@ -112,13 +112,10 @@ impl AuditJournal {
     }
     pub fn save(&self, path: &Path) -> Result<()> {
         self.validate()?;
-        let temporary = path.with_extension("tmp");
-        fs::write(&temporary, canonical_bytes(self)?)?;
-        fs::rename(temporary, path)?;
-        Ok(())
+        save_atomic_snapshot(path, &canonical_bytes(self)?, "audit journal")
     }
     pub fn load(path: &Path) -> Result<Self> {
-        let bytes = fs::read(path)?;
+        let bytes = read_regular_snapshot(path)?;
         let journal: Self = serde_json::from_slice(&bytes)?;
         if canonical_bytes(&journal)? != bytes {
             return Err(Error::Journal("audit bytes are not canonical JSON".into()));
@@ -127,15 +124,6 @@ impl AuditJournal {
         Ok(journal)
     }
     pub fn recover(path: &Path) -> Result<Self> {
-        match Self::load(path) {
-            Ok(journal) => Ok(journal),
-            Err(Error::Persistence(error)) if error.kind() == std::io::ErrorKind::NotFound => {
-                let temporary = path.with_extension("tmp");
-                let journal = Self::load(&temporary)?;
-                fs::rename(temporary, path)?;
-                Ok(journal)
-            }
-            Err(error) => Err(error),
-        }
+        recover_atomic_snapshot(path, "audit journal", Self::load)
     }
 }

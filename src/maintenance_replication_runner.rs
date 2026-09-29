@@ -1,6 +1,7 @@
 //! Host-side runner for the fixed maintenance replication matrix.
 //!
-//! State slice: `security-alignment-os-foundation-v1`.
+//! State slices: `security-alignment-os-foundation-v1` and
+//! `maintenance-replication-runner-identity-v3`.
 //!
 //! This module executes only the already frozen maintenance broker operation.
 //! It creates isolated per-scenario checkouts, records raw local evidence, and
@@ -87,6 +88,7 @@ struct Case {
     root: PathBuf,
     checkout: PathBuf,
     state: PathBuf,
+    maintenance_broker_executable_digest: String,
     cancel: PathBuf,
     config_path: PathBuf,
     request_path: PathBuf,
@@ -178,6 +180,43 @@ fn ensure_private_file(path: &Path) -> Result<Vec<u8>> {
     }
     mode_owner_only(path)?;
     Ok(fs::read(path)?)
+}
+
+fn read_regular_executable(path: &Path) -> Result<Vec<u8>> {
+    let metadata = fs::symlink_metadata(path)?;
+    if !metadata.is_file() {
+        return Err(Error::Rejected(
+            "runner executable path is not a regular file".into(),
+        ));
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if metadata.permissions().mode() & 0o111 == 0 {
+            return Err(Error::Rejected(
+                "runner executable has no execute permission".into(),
+            ));
+        }
+    }
+    let bytes = fs::read(path)?;
+    if bytes.is_empty() {
+        return Err(Error::Rejected("runner executable is empty".into()));
+    }
+    Ok(bytes)
+}
+
+fn running_executable_digest() -> Result<String> {
+    let path = fs::canonicalize(std::env::current_exe()?)?;
+    Ok(digest_bytes(&read_regular_executable(&path)?))
+}
+
+fn verify_broker_executable(path: &Path, expected_digest: &str) -> Result<()> {
+    if digest_bytes(&read_regular_executable(path)?) != expected_digest {
+        return Err(Error::Rejected(
+            "maintenance broker executable changed before launch".into(),
+        ));
+    }
+    Ok(())
 }
 
 fn write_private(path: &Path, bytes: &[u8]) -> Result<()> {
@@ -569,6 +608,7 @@ fn spawn_broker(
     failpoint: Option<&str>,
     pause_ms: Option<u64>,
 ) -> Result<Child> {
+    verify_broker_executable(broker, &case.maintenance_broker_executable_digest)?;
     let mut command = Command::new(broker);
     command
         .arg(&case.config_path)
@@ -641,7 +681,12 @@ fn full_digest(root: &Path) -> Result<String> {
     checkout_baseline_digest(root)
 }
 
-fn scenario_case(spec: &RunnerSpec, scenario_id: &str, index: usize) -> Result<Case> {
+fn scenario_case(
+    spec: &RunnerSpec,
+    maintenance_broker_executable_digest: &str,
+    scenario_id: &str,
+    index: usize,
+) -> Result<Case> {
     let root = spec
         .artifact_dir
         .join("cases")
@@ -659,6 +704,7 @@ fn scenario_case(spec: &RunnerSpec, scenario_id: &str, index: usize) -> Result<C
         root: root.clone(),
         checkout,
         state: state.clone(),
+        maintenance_broker_executable_digest: maintenance_broker_executable_digest.into(),
         cancel: root.join("cancel"),
         config_path,
         request_path,
@@ -883,12 +929,18 @@ fn chmod_state(path: &Path, mode: u32) -> Result<()> {
 
 fn run_scenario(
     spec: &RunnerSpec,
+    maintenance_broker_executable_digest: &str,
     evaluator_digest: &str,
     evaluator_key: &str,
     scenario_id: &str,
     index: usize,
 ) -> Result<ScenarioResult> {
-    let mut case = scenario_case(spec, scenario_id, index)?;
+    let mut case = scenario_case(
+        spec,
+        maintenance_broker_executable_digest,
+        scenario_id,
+        index,
+    )?;
     let baseline = spec.frozen.request.checkout_baseline_digest.clone();
     case = prepare_case(spec, case, evaluator_digest, evaluator_key)?;
     let initial = baseline.clone();
@@ -1234,6 +1286,9 @@ fn run_scenario(
                 root: case.root.clone(),
                 checkout: case.checkout.clone(),
                 state: state_two,
+                maintenance_broker_executable_digest: case
+                    .maintenance_broker_executable_digest
+                    .clone(),
                 cancel: case.cancel.clone(),
                 config_path: contender_config_path,
                 request_path: contender_request_path,
@@ -1342,6 +1397,7 @@ fn validate_spec(spec: &RunnerSpec) -> Result<()> {
 
 pub fn run_host(spec: &RunnerSpec) -> Result<HostReport> {
     validate_spec(spec)?;
+    let replication_runner_executable_digest = running_executable_digest()?;
     ensure_private_dir(&spec.artifact_dir)?;
     mode_owner_only(&spec.checkout_source)?;
     let source_baseline = checkout_baseline_digest(&spec.checkout_source)?;
@@ -1358,6 +1414,8 @@ pub fn run_host(spec: &RunnerSpec) -> Result<HostReport> {
             "runner source checkout does not match frozen manifest".into(),
         ));
     }
+    let maintenance_broker_executable_digest =
+        digest_bytes(&read_regular_executable(&spec.maintenance_broker_path)?);
     let evaluator_bytes = ensure_private_file(&spec.evaluator_path)?;
     let evaluator_digest = digest_bytes(&evaluator_bytes);
     let evaluator_seed = read_seed(&spec.evaluator_seed_path)?;
@@ -1380,9 +1438,21 @@ pub fn run_host(spec: &RunnerSpec) -> Result<HostReport> {
     let mut scenarios = Vec::with_capacity(REQUIRED_SCENARIOS.len());
     for (index, scenario_id) in REQUIRED_SCENARIOS.iter().enumerate() {
         scenarios.push(
-            run_scenario(spec, &evaluator_digest, &evaluator_key, scenario_id, index)
-                .map_err(|error| Error::Rejected(format!("{scenario_id}: {error}")))?,
+            run_scenario(
+                spec,
+                &maintenance_broker_executable_digest,
+                &evaluator_digest,
+                &evaluator_key,
+                scenario_id,
+                index,
+            )
+            .map_err(|error| Error::Rejected(format!("{scenario_id}: {error}")))?,
         );
+    }
+    if running_executable_digest()? != replication_runner_executable_digest {
+        return Err(Error::Rejected(
+            "replication runner executable changed during scenario execution".into(),
+        ));
     }
     let mut report = HostReport {
         version: REPLICATION_VERSION,
@@ -1395,6 +1465,8 @@ pub fn run_host(spec: &RunnerSpec) -> Result<HostReport> {
         checkout_baseline_digest: spec.frozen.request.checkout_baseline_digest.clone(),
         baseline_manifest_digest: baseline_manifest_digest(&spec.frozen.baseline_manifest)?,
         evaluator_executable_digest: evaluator_digest,
+        maintenance_broker_executable_digest: Some(maintenance_broker_executable_digest),
+        replication_runner_executable_digest: Some(replication_runner_executable_digest),
         evaluator_input_digest: fixed_input_digest(),
         evaluator_tests_digest: fixed_tests_digest(),
         policy_digest: fixed_policy_digest(),
@@ -1475,4 +1547,30 @@ pub fn generate_seed_file(path: &Path, marker: u8) -> Result<()> {
         seed[0] = marker.max(1);
     }
     write_new_private(path, &seed)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::verify_broker_executable;
+    use crate::digest_bytes;
+    use std::fs;
+    use std::os::unix::fs::PermissionsExt;
+
+    #[test]
+    fn broker_executable_guard_rejects_replacement_and_symlinks() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let executable = directory.path().join("broker");
+        fs::write(&executable, b"pinned broker bytes").expect("write broker");
+        fs::set_permissions(&executable, fs::Permissions::from_mode(0o700))
+            .expect("make executable");
+        let expected = digest_bytes(&fs::read(&executable).expect("read broker"));
+        verify_broker_executable(&executable, &expected).expect("pinned executable");
+
+        fs::write(&executable, b"replacement broker bytes").expect("replace broker");
+        assert!(verify_broker_executable(&executable, &expected).is_err());
+
+        let symlink = directory.path().join("broker-link");
+        std::os::unix::fs::symlink(&executable, &symlink).expect("symlink broker");
+        assert!(verify_broker_executable(&symlink, &expected).is_err());
+    }
 }

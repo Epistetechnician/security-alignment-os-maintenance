@@ -1,15 +1,17 @@
 //! Separate-host replication contract checks.
 //!
-//! State slice: `security-alignment-os-foundation-v1`.
+//! State slices: `security-alignment-os-foundation-v1` and
+//! `maintenance-replication-runner-identity-v3`.
 
 use ed25519_dalek::SigningKey;
 use security_alignment_os::maintenance_process::{
     fixed_input_digest, fixed_policy_digest, fixed_tests_digest, Request,
 };
 use security_alignment_os::maintenance_replication::{
-    baseline_manifest_digest, BaselineManifestEntry, HostReport, ManifestFileKind,
-    RecoveryDisposition, ReplicationPacket, ScenarioResult, ScenarioRole, ScenarioStatus,
-    FIXED_OPERATION_IDENTITY, REPLICATION_CLAIM_CEILING, REPLICATION_VERSION, REQUIRED_SCENARIOS,
+    baseline_manifest_digest, baseline_manifest_digest_for_version, BaselineManifestEntry,
+    HostReport, ManifestFileKind, RecoveryDisposition, ReplicationPacket, ScenarioResult,
+    ScenarioRole, ScenarioStatus, BROKER_IDENTITY_REPLICATION_VERSION, FIXED_OPERATION_IDENTITY,
+    LEGACY_REPLICATION_VERSION, REPLICATION_CLAIM_CEILING, REPLICATION_VERSION, REQUIRED_SCENARIOS,
 };
 use security_alignment_os::{digest, digest_bytes, Result};
 use std::fs;
@@ -194,6 +196,8 @@ fn report_with_bindings(
         checkout_baseline_digest: "a".repeat(64),
         baseline_manifest_digest: baseline_manifest_digest.into(),
         evaluator_executable_digest: "b".repeat(64),
+        maintenance_broker_executable_digest: Some("d".repeat(64)),
+        replication_runner_executable_digest: Some("e".repeat(64)),
         evaluator_input_digest: fixed_input_digest(),
         evaluator_tests_digest: fixed_tests_digest(),
         policy_digest: fixed_policy_digest(),
@@ -284,11 +288,136 @@ fn two_signed_reports_round_trip_as_canonical_packet() {
     let packet = packet();
 
     packet.validate().expect("valid packet");
+    assert_eq!(packet.version, REPLICATION_VERSION);
+    assert_eq!(
+        packet.maintenance_broker_executable_digest,
+        Some("d".repeat(64))
+    );
+    assert_eq!(
+        packet.reports[0].replication_runner_executable_digest,
+        Some("e".repeat(64))
+    );
     let bytes = packet.canonical_bytes().expect("canonical packet");
     assert_eq!(
         ReplicationPacket::from_canonical_bytes(&bytes).expect("round trip"),
         packet
     );
+}
+
+#[test]
+fn legacy_v1_reports_remain_verifiable_without_broker_binding() {
+    let mut first = report(1, "host-a", "operator-a");
+    first.version = LEGACY_REPLICATION_VERSION;
+    first.baseline_manifest_digest =
+        baseline_manifest_digest_for_version(&baseline_manifest(), LEGACY_REPLICATION_VERSION)
+            .expect("V1 manifest digest");
+    first.maintenance_broker_executable_digest = None;
+    first.replication_runner_executable_digest = None;
+    first
+        .sign_with_seeds([1; 32], [11; 32])
+        .expect("legacy host report");
+    let mut second = report_with_roles(
+        2,
+        "host-b",
+        "operator-b",
+        ScenarioRole::Contender,
+        ScenarioRole::Winner,
+    );
+    second.version = LEGACY_REPLICATION_VERSION;
+    second.baseline_manifest_digest = first.baseline_manifest_digest.clone();
+    second.maintenance_broker_executable_digest = None;
+    second.replication_runner_executable_digest = None;
+    second
+        .sign_with_seeds([2; 32], [12; 32])
+        .expect("legacy second host report");
+
+    let packet = packet_with_reports(vec![first, second]).expect("legacy packet remains readable");
+    assert_eq!(packet.version, LEGACY_REPLICATION_VERSION);
+    assert_eq!(packet.maintenance_broker_executable_digest, None);
+    let bytes = packet.canonical_bytes().expect("legacy canonical packet");
+    assert!(!String::from_utf8(bytes.clone())
+        .expect("legacy JSON")
+        .contains("maintenance_broker_executable_digest"));
+    assert!(!String::from_utf8(bytes.clone())
+        .expect("legacy JSON")
+        .contains("replication_runner_executable_digest"));
+    assert_eq!(
+        ReplicationPacket::from_canonical_bytes(&bytes).expect("legacy round trip"),
+        packet
+    );
+}
+
+#[test]
+fn v2_reports_remain_verifiable_without_runner_binding() {
+    let mut first = report(1, "host-a", "operator-a");
+    first.version = BROKER_IDENTITY_REPLICATION_VERSION;
+    first.baseline_manifest_digest = baseline_manifest_digest_for_version(
+        &baseline_manifest(),
+        BROKER_IDENTITY_REPLICATION_VERSION,
+    )
+    .expect("V2 manifest digest");
+    first.replication_runner_executable_digest = None;
+    first
+        .sign_with_seeds([1; 32], [11; 32])
+        .expect("V2 host report");
+    let mut second = report_with_roles(
+        2,
+        "host-b",
+        "operator-b",
+        ScenarioRole::Contender,
+        ScenarioRole::Winner,
+    );
+    second.version = BROKER_IDENTITY_REPLICATION_VERSION;
+    second.baseline_manifest_digest = first.baseline_manifest_digest.clone();
+    second.replication_runner_executable_digest = None;
+    second
+        .sign_with_seeds([2; 32], [12; 32])
+        .expect("V2 second host report");
+
+    let packet = packet_with_reports(vec![first, second]).expect("V2 packet remains readable");
+    assert_eq!(packet.version, BROKER_IDENTITY_REPLICATION_VERSION);
+    assert_eq!(
+        packet.maintenance_broker_executable_digest,
+        Some("d".repeat(64))
+    );
+    let bytes = packet.canonical_bytes().expect("V2 canonical packet");
+    let serialized = String::from_utf8(bytes.clone()).expect("V2 JSON");
+    assert!(serialized.contains("maintenance_broker_executable_digest"));
+    assert!(!serialized.contains("replication_runner_executable_digest"));
+    assert_eq!(
+        ReplicationPacket::from_canonical_bytes(&bytes).expect("V2 round trip"),
+        packet
+    );
+}
+
+#[test]
+fn v3_runner_identity_is_signed_per_host_and_rejects_tampering() {
+    let first = report(1, "host-a", "operator-a");
+    let mut second = report_with_roles(
+        2,
+        "host-b",
+        "operator-b",
+        ScenarioRole::Contender,
+        ScenarioRole::Winner,
+    );
+    second.replication_runner_executable_digest = Some("f".repeat(64));
+    second
+        .sign_with_seeds([2; 32], [12; 32])
+        .expect("host report with its own runner identity");
+    let packet = packet_with_reports(vec![first.clone(), second.clone()])
+        .expect("runner identities may differ across host reports");
+    assert_ne!(
+        packet.reports[0].replication_runner_executable_digest,
+        packet.reports[1].replication_runner_executable_digest
+    );
+
+    let mut tampered = second;
+    tampered.replication_runner_executable_digest = Some("0".repeat(64));
+    assert!(tampered.validate().is_err());
+
+    let mut missing = first;
+    missing.replication_runner_executable_digest = None;
+    assert!(missing.validate().is_err());
 }
 
 #[test]
@@ -379,7 +508,8 @@ fn duplicate_keys_and_noncanonical_whitespace_are_rejected() {
     let packet = packet();
     let bytes = packet.canonical_bytes().expect("canonical packet");
     let text = String::from_utf8(bytes.clone()).expect("json");
-    let duplicate = text.replacen("\"version\":1", "\"version\":1,\"version\":1", 1);
+    let version = format!("\"version\":{}", packet.version);
+    let duplicate = text.replacen(&version, &format!("{version},{version}"), 1);
     assert!(ReplicationPacket::from_canonical_bytes(duplicate.as_bytes()).is_err());
 
     let mut padded = Vec::with_capacity(bytes.len() + 1);
@@ -408,6 +538,24 @@ fn reports_must_bind_the_same_toolchain_digest() {
         .sign_with_seeds([2; 32], [12; 32])
         .expect("resigned report");
     assert!(packet_with_reports(vec![first, second]).is_err());
+}
+
+#[test]
+fn reports_must_bind_the_same_maintenance_broker_executable() {
+    let first = report(1, "host-a", "operator-a");
+    let mut second = report(2, "host-b", "operator-b");
+    second.maintenance_broker_executable_digest = Some("e".repeat(64));
+    second
+        .sign_with_seeds([2; 32], [12; 32])
+        .expect("resigned report");
+    assert!(packet_with_reports(vec![first, second]).is_err());
+}
+
+#[test]
+fn broker_executable_digest_tampering_invalidates_the_signed_report() {
+    let mut report = report(1, "host-a", "operator-a");
+    report.maintenance_broker_executable_digest = Some("e".repeat(64));
+    assert!(report.validate().is_err());
 }
 
 #[test]

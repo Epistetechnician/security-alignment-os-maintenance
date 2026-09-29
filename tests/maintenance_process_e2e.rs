@@ -188,6 +188,23 @@ fn wait_for_path(path: &Path) {
     panic!("timed out waiting for {}", path.display());
 }
 
+fn wait_for_evaluator_job(state_dir: &Path) {
+    for _ in 0..1_000 {
+        if fs::read_dir(state_dir)
+            .unwrap()
+            .flatten()
+            .any(|entry| entry.file_name().to_string_lossy().ends_with(".job"))
+        {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    panic!(
+        "timed out waiting for evaluator job in {}",
+        state_dir.display()
+    );
+}
+
 #[test]
 fn useful_patch_and_replay_across_processes() {
     let fixture = Fixture::new();
@@ -261,6 +278,27 @@ fn paths_symlinks_and_hardlinks_never_escape() {
         }
         assert_eq!(fs::read(external).unwrap(), BEFORE);
     }
+}
+
+#[test]
+fn evaluator_replacement_after_startup_is_rejected_before_launch() {
+    let fixture = Fixture::new();
+    let child = fixture.spawn(Some("pause-before-evaluator-launch"), Some(1_000));
+    wait_for_evaluator_job(&fixture.config.state_dir);
+    fs::write(
+        &fixture.config.evaluator_path,
+        b"replacement evaluator bytes",
+    )
+    .unwrap();
+    let output = child.wait_with_output().unwrap();
+    assert!(output.status.success());
+    let result: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(result["status"], "Quarantined", "{result}");
+    assert!(result["reason"]
+        .as_str()
+        .unwrap_or_default()
+        .contains("evaluator executable changed before launch"));
+    fixture.assert_baseline();
 }
 
 #[test]

@@ -10,10 +10,11 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest as ShaDigest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
-use std::fs;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 use thiserror::Error;
+
+use crate::persistence::{read_regular_snapshot, recover_atomic_snapshot, save_atomic_snapshot};
 
 pub mod adaptation;
 pub mod adapters;
@@ -36,6 +37,7 @@ pub mod maintenance_replication;
 pub mod maintenance_replication_runner;
 pub mod market;
 pub mod memory;
+mod persistence;
 pub mod property;
 pub mod receipts;
 pub mod routing;
@@ -403,14 +405,10 @@ impl ReplayJournal {
     }
     pub fn save(&self, path: &Path) -> Result<()> {
         self.validate()?;
-        let bytes = canonical_bytes(self)?;
-        let temporary = path.with_extension("tmp");
-        fs::write(&temporary, bytes)?;
-        fs::rename(temporary, path)?;
-        Ok(())
+        save_atomic_snapshot(path, &canonical_bytes(self)?, "replay journal")
     }
     pub fn load(path: &Path) -> Result<Self> {
-        let bytes = fs::read(path)?;
+        let bytes = read_regular_snapshot(path)?;
         let journal: Self = serde_json::from_slice(&bytes)?;
         if canonical_bytes(&journal)? != bytes {
             return Err(Error::Journal(
@@ -421,16 +419,7 @@ impl ReplayJournal {
         Ok(journal)
     }
     pub fn recover(path: &Path) -> Result<Self> {
-        match Self::load(path) {
-            Ok(journal) => Ok(journal),
-            Err(Error::Persistence(error)) if error.kind() == std::io::ErrorKind::NotFound => {
-                let temporary = path.with_extension("tmp");
-                let journal = Self::load(&temporary)?;
-                fs::rename(temporary, path)?;
-                Ok(journal)
-            }
-            Err(error) => Err(error),
-        }
+        recover_atomic_snapshot(path, "replay journal", Self::load)
     }
 }
 
@@ -546,13 +535,10 @@ impl Kernel {
     pub fn save_snapshot(&self, path: &Path) -> Result<()> {
         let snapshot = self.snapshot();
         snapshot.validate()?;
-        let temporary = path.with_extension("tmp");
-        fs::write(&temporary, canonical_bytes(&snapshot)?)?;
-        fs::rename(temporary, path)?;
-        Ok(())
+        save_atomic_snapshot(path, &canonical_bytes(&snapshot)?, "kernel snapshot")
     }
     pub fn load_snapshot(path: &Path) -> Result<Self> {
-        let bytes = fs::read(path)?;
+        let bytes = read_regular_snapshot(path)?;
         let snapshot: KernelSnapshot = serde_json::from_slice(&bytes)?;
         if canonical_bytes(&snapshot)? != bytes {
             return Err(Error::Journal(
@@ -562,16 +548,7 @@ impl Kernel {
         Self::from_snapshot(snapshot)
     }
     pub fn recover_snapshot(path: &Path) -> Result<Self> {
-        match Self::load_snapshot(path) {
-            Ok(kernel) => Ok(kernel),
-            Err(Error::Persistence(error)) if error.kind() == std::io::ErrorKind::NotFound => {
-                let temporary = path.with_extension("tmp");
-                let kernel = Self::load_snapshot(&temporary)?;
-                fs::rename(temporary, path)?;
-                Ok(kernel)
-            }
-            Err(error) => Err(error),
-        }
+        recover_atomic_snapshot(path, "kernel snapshot", Self::load_snapshot)
     }
     pub fn lifecycle_state(&self, candidate_digest: &str) -> Option<contract::LifecycleState> {
         self.lifecycles
@@ -953,14 +930,11 @@ impl Runtime {
     pub fn save_snapshot(&self, path: &Path) -> Result<()> {
         let snapshot = self.snapshot();
         Self::from_snapshot(snapshot.clone())?;
-        let temporary = path.with_extension("tmp");
-        fs::write(&temporary, canonical_bytes(&snapshot)?)?;
-        fs::rename(temporary, path)?;
-        Ok(())
+        save_atomic_snapshot(path, &canonical_bytes(&snapshot)?, "runtime snapshot")
     }
 
     pub fn load_snapshot(path: &Path) -> Result<Self> {
-        let bytes = fs::read(path)?;
+        let bytes = read_regular_snapshot(path)?;
         let snapshot: RuntimeSnapshot = serde_json::from_slice(&bytes)?;
         if canonical_bytes(&snapshot)? != bytes {
             return Err(Error::Journal(
@@ -971,16 +945,7 @@ impl Runtime {
     }
 
     pub fn recover_snapshot(path: &Path) -> Result<Self> {
-        match Self::load_snapshot(path) {
-            Ok(runtime) => Ok(runtime),
-            Err(Error::Persistence(error)) if error.kind() == std::io::ErrorKind::NotFound => {
-                let temporary = path.with_extension("tmp");
-                let runtime = Self::load_snapshot(&temporary)?;
-                fs::rename(temporary, path)?;
-                Ok(runtime)
-            }
-            Err(error) => Err(error),
-        }
+        recover_atomic_snapshot(path, "runtime snapshot", Self::load_snapshot)
     }
 
     pub fn is_frozen(&self) -> bool {
@@ -1249,14 +1214,11 @@ impl EvidenceRegistry {
 
     pub fn save(&self, path: &Path) -> Result<()> {
         self.validate()?;
-        let temporary = path.with_extension("tmp");
-        fs::write(&temporary, canonical_bytes(self)?)?;
-        fs::rename(temporary, path)?;
-        Ok(())
+        save_atomic_snapshot(path, &canonical_bytes(self)?, "evidence registry")
     }
 
     pub fn load(path: &Path) -> Result<Self> {
-        let bytes = fs::read(path)?;
+        let bytes = read_regular_snapshot(path)?;
         let registry: Self = serde_json::from_slice(&bytes)?;
         if canonical_bytes(&registry)? != bytes {
             return Err(Error::Journal(
@@ -1268,16 +1230,7 @@ impl EvidenceRegistry {
     }
 
     pub fn recover(path: &Path) -> Result<Self> {
-        match Self::load(path) {
-            Ok(registry) => Ok(registry),
-            Err(Error::Persistence(error)) if error.kind() == std::io::ErrorKind::NotFound => {
-                let temporary = path.with_extension("tmp");
-                let registry = Self::load(&temporary)?;
-                fs::rename(temporary, path)?;
-                Ok(registry)
-            }
-            Err(error) => Err(error),
-        }
+        recover_atomic_snapshot(path, "evidence registry", Self::load)
     }
 }
 
@@ -1315,6 +1268,9 @@ pub type SharedKernel = Arc<Mutex<Kernel>>;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt;
     use tempfile::tempdir;
 
     fn claim() -> Claim {
@@ -1730,6 +1686,76 @@ mod tests {
     }
 
     #[test]
+    fn replay_journal_recovery_promotes_valid_pending_snapshot_over_primary() {
+        let mut primary = ReplayJournal::default();
+        primary
+            .append(&"a".repeat(64), &"b".repeat(64), &"c".repeat(64))
+            .unwrap();
+        let mut pending = primary.clone();
+        pending
+            .append(&"d".repeat(64), &"e".repeat(64), &"f".repeat(64))
+            .unwrap();
+        let directory = tempdir().unwrap();
+        let path = directory.path().join("journal.json");
+        primary.save(&path).unwrap();
+        fs::write(
+            path.with_extension("tmp"),
+            canonical_bytes(&pending).unwrap(),
+        )
+        .unwrap();
+        assert!(primary.save(&path).is_err());
+        assert!(path.with_extension("tmp").exists());
+
+        assert_eq!(ReplayJournal::recover(&path).unwrap(), pending);
+        assert!(!path.with_extension("tmp").exists());
+    }
+
+    #[test]
+    fn replay_journal_serializes_concurrent_snapshot_replacements() {
+        use std::sync::Barrier;
+
+        let directory = tempdir().unwrap();
+        let path = directory.path().join("concurrent-journal.json");
+        let mut first = ReplayJournal::default();
+        first
+            .append(&"a".repeat(64), &"b".repeat(64), &"c".repeat(64))
+            .unwrap();
+        let mut second = first.clone();
+        second
+            .append(&"d".repeat(64), &"e".repeat(64), &"f".repeat(64))
+            .unwrap();
+
+        let barrier = Arc::new(Barrier::new(3));
+        let writers = [first.clone(), second.clone()].map(|journal| {
+            let path = path.clone();
+            let barrier = barrier.clone();
+            std::thread::spawn(move || {
+                barrier.wait();
+                for _ in 0..16 {
+                    journal
+                        .save(&path)
+                        .expect("serialize complete snapshot save");
+                    std::thread::yield_now();
+                }
+            })
+        });
+        barrier.wait();
+        for writer in writers {
+            writer.join().unwrap();
+        }
+
+        let recovered = ReplayJournal::recover(&path).unwrap();
+        assert!(recovered == first || recovered == second);
+        assert!(!path.with_extension("tmp").exists());
+        assert!(!path.with_extension("lock").exists());
+        #[cfg(unix)]
+        assert_eq!(
+            fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+    }
+
+    #[test]
     fn kill_closes_rollback() {
         let mut runtime = Runtime::default();
         runtime.kill("operator");
@@ -1770,6 +1796,8 @@ mod tests {
         resources.insert("note".into());
         let grant =
             specialist::ConsentGrant::new("tenant".into(), "s".into(), resources, 0, 100).unwrap();
+        let mut consent_registry = specialist::ConsentRegistry::default();
+        consent_registry.grant(grant.clone()).unwrap();
         let mut retrieval = specialist::TenantRetrieval::default();
         retrieval
             .put(
@@ -1778,13 +1806,16 @@ mod tests {
                 Value::String("local".into()),
             )
             .unwrap();
-        retrieval.grant(grant.clone()).unwrap();
         assert_eq!(
-            retrieval.retrieve(&registry, &grant, "note", 1).unwrap(),
+            retrieval
+                .retrieve(&registry, &consent_registry, &grant, "note", 1)
+                .unwrap(),
             Value::String("local".into())
         );
         registry.revoke("s").unwrap();
-        assert!(retrieval.retrieve(&registry, &grant, "note", 1).is_err());
+        assert!(retrieval
+            .retrieve(&registry, &consent_registry, &grant, "note", 1)
+            .is_err());
         let job =
             market::SumJob::new("j".into(), "requester".into(), vec![1, 2, 3], 100, 0).unwrap();
         let receipt = market::execute_local(&job, 10).unwrap();
@@ -1931,6 +1962,11 @@ mod tests {
         let path = dir.path().join("audit.json");
         runtime.save_audit(&path).unwrap();
         assert_eq!(audit::AuditJournal::load(&path).unwrap(), journal);
+        #[cfg(unix)]
+        assert_eq!(
+            fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
         let mut release = governance::ReleaseRegistry::default();
         let candidate = governance::CandidateUpdate {
             candidate_id: "c".into(),
@@ -1979,6 +2015,11 @@ mod tests {
         runtime.save_snapshot(&path).unwrap();
         let loaded = Runtime::load_snapshot(&path).unwrap();
         assert_eq!(loaded.snapshot(), runtime.snapshot());
+        #[cfg(unix)]
+        assert_eq!(
+            fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
         let canonical = fs::read(&path).unwrap();
         let mut tampered = canonical.clone();
         let tamper_index = tampered.len() - 2;
@@ -1986,7 +2027,6 @@ mod tests {
         fs::write(&path, tampered).unwrap();
         assert!(Runtime::load_snapshot(&path).is_err());
         fs::write(path.with_extension("tmp"), canonical).unwrap();
-        fs::remove_file(&path).unwrap();
         assert_eq!(
             Runtime::recover_snapshot(&path).unwrap().snapshot(),
             runtime.snapshot()
@@ -2026,6 +2066,11 @@ mod tests {
         kernel.save_snapshot(&path).unwrap();
         let mut loaded = Kernel::load_snapshot(&path).unwrap();
         assert_eq!(loaded.snapshot(), kernel.snapshot());
+        #[cfg(unix)]
+        assert_eq!(
+            fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
         assert!(loaded.lifecycle_state(&candidate_digest).is_some());
         assert!(
             !loaded.consume(&p, &decision, 10).unwrap(),
@@ -2039,7 +2084,6 @@ mod tests {
         fs::write(&path, tampered).unwrap();
         assert!(Kernel::load_snapshot(&path).is_err());
         fs::write(path.with_extension("tmp"), canonical).unwrap();
-        fs::remove_file(&path).unwrap();
         assert_eq!(
             Kernel::recover_snapshot(&path).unwrap().snapshot(),
             kernel.snapshot()
@@ -2234,44 +2278,77 @@ mod tests {
         .unwrap();
         let dir = tempdir().unwrap();
         let path = dir.path().join("memory.json");
+        let consent_path = dir.path().join("consent.json");
+        let mut consent_registry = specialist::ConsentRegistry::open(&consent_path).unwrap();
+        consent_registry.grant(grant.clone()).unwrap();
         let mut memory = memory::PersistentMemory::open(&path).unwrap();
         let value = serde_json::json!({"kind": "local", "number": 7});
         let value_digest = memory
-            .put(&registry, &grant, "note", value.clone(), 1)
+            .put(
+                &registry,
+                &consent_registry,
+                &grant,
+                "note",
+                value.clone(),
+                1,
+            )
             .unwrap();
         assert_eq!(value_digest, digest(&value).unwrap());
         assert_eq!(memory.len(), 1);
         assert_eq!(
-            memory.retrieve(&registry, &grant, "note", 1).unwrap(),
+            memory
+                .retrieve(&registry, &consent_registry, &grant, "note", 1)
+                .unwrap(),
             value
         );
         drop(memory);
+        let consent_registry = specialist::ConsentRegistry::recover(&consent_path).unwrap();
         let memory = memory::PersistentMemory::open(&path).unwrap();
         assert_eq!(
-            memory.retrieve(&registry, &grant, "note", 1).unwrap(),
+            memory
+                .retrieve(&registry, &consent_registry, &grant, "note", 1)
+                .unwrap(),
             value
         );
         let canonical = fs::read(&path).unwrap();
-        fs::write(path.with_extension("tmp"), canonical).unwrap();
+        let temporary = path.with_extension("tmp");
+        fs::write(&temporary, canonical).unwrap();
+        #[cfg(unix)]
+        fs::set_permissions(&temporary, fs::Permissions::from_mode(0o600)).unwrap();
         fs::remove_file(&path).unwrap();
         let memory = memory::PersistentMemory::recover(&path).unwrap();
         assert_eq!(
-            memory.retrieve(&registry, &grant, "note", 1).unwrap(),
+            memory
+                .retrieve(&registry, &consent_registry, &grant, "note", 1)
+                .unwrap(),
             value
         );
         let bad_path = dir.path().join("missing-parent").join("memory.json");
         let mut failing = memory::PersistentMemory::open(&bad_path).unwrap();
         assert!(failing
-            .put(&registry, &grant, "note", value.clone(), 1)
+            .put(
+                &registry,
+                &consent_registry,
+                &grant,
+                "note",
+                value.clone(),
+                1
+            )
             .is_err());
         assert!(failing.is_empty());
-        assert!(memory.retrieve(&registry, &grant, "missing", 1).is_err());
-        assert!(memory.retrieve(&registry, &grant, "note", 100).is_err());
+        assert!(memory
+            .retrieve(&registry, &consent_registry, &grant, "missing", 1)
+            .is_err());
+        assert!(memory
+            .retrieve(&registry, &consent_registry, &grant, "note", 100)
+            .is_err());
         let forged = specialist::ConsentGrant {
             grant_id: "f".repeat(64),
             ..grant
         };
-        assert!(memory.retrieve(&registry, &forged, "note", 1).is_err());
+        assert!(memory
+            .retrieve(&registry, &consent_registry, &forged, "note", 1)
+            .is_err());
     }
 
     #[test]
@@ -2352,7 +2429,7 @@ mod tests {
             source_digest: "c".repeat(64),
             license: "MIT".into(),
             provenance_digest: "d".repeat(64),
-            custody_root: "/tmp/local-custody".into(),
+            custody_root: "local-custody-root".into(),
             retention_start: 0,
             retention_until: 100,
         };
@@ -2362,6 +2439,25 @@ mod tests {
         assert!(artifacts
             .accept("source-artifact", &p.source_digest, "reviewer", 10)
             .is_ok());
+        let mut custody = custody::CustodyRegistry::default();
+        custody
+            .declare(
+                "source-custody",
+                custody::CustodyRoot {
+                    root_id: "local-custody-root".into(),
+                    owner_id: "owner".into(),
+                    root_digest: "e".repeat(64),
+                    mode: 0o700,
+                    external_to_repository: true,
+                    created_at: 0,
+                    expires_at: 1_000,
+                    raw_retention_until: 100,
+                },
+                p.source_digest.clone(),
+                "owner",
+                "custody-validator",
+            )
+            .unwrap();
         let result = integration::run_with_artifact(
             &mut kernel,
             &mut runtime,
@@ -2370,6 +2466,8 @@ mod tests {
                 evidence_id: "artifact-evidence",
                 artifacts: &artifacts,
                 artifact_id: "source-artifact",
+                custody: &custody,
+                custody_id: "source-custody",
             },
             &p,
             integration::Observation {

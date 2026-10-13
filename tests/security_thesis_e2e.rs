@@ -2,12 +2,13 @@
 //!
 //! State slice: `security-alignment-os-foundation-v1`.
 
-use security_alignment_os::claims::{AggregateReleasePacket, ClaimEnvelope};
+use security_alignment_os::claims::{AggregateReleasePacket, ClaimEnvelope, ClaimEvidenceBinding};
 use security_alignment_os::contract::LifecycleState;
 use security_alignment_os::custody::{CustodyRegistry, CustodyRoot, LocalCustodyPaths};
 use security_alignment_os::execution_gate::{
     ExecutionGate, ExternalExecutionRequest, GateDisposition, SandboxAttestation,
 };
+use security_alignment_os::governance::{CandidateUpdate, ReleaseRegistry, ReleaseState};
 use security_alignment_os::integration::{
     self, Disposition, EvidenceBinding, Observation, ReceiptBinding,
 };
@@ -362,6 +363,35 @@ fn invalid_receipt_signature_quarantines_before_mutation() {
 
 #[test]
 fn claim_meet_cannot_expand_scope_and_external_execution_stays_blocked() {
+    let subject_digest = "9".repeat(64);
+    let first_evidence = Evidence {
+        id: "claim-evidence-a".into(),
+        source_digest: subject_digest.clone(),
+        operator_id: "claim-operator-a".into(),
+        validator_id: "claim-validator-a".into(),
+        reviewer_id: "claim-reviewer-a".into(),
+        valid_until: 100,
+        accepted: true,
+        revoked: false,
+    };
+    let second_evidence = Evidence {
+        id: "claim-evidence-b".into(),
+        source_digest: subject_digest.clone(),
+        operator_id: "claim-operator-b".into(),
+        validator_id: "claim-validator-b".into(),
+        reviewer_id: "claim-reviewer-b".into(),
+        valid_until: 100,
+        accepted: true,
+        revoked: false,
+    };
+    let mut evidence = EvidenceRegistry::default();
+    evidence
+        .insert(first_evidence.clone())
+        .expect("insert first local evidence assertion");
+    evidence
+        .insert(second_evidence.clone())
+        .expect("insert second local evidence assertion");
+
     let first = ClaimEnvelope {
         claim_id: "local-control".into(),
         state_slice: STATE_SLICE.into(),
@@ -369,7 +399,7 @@ fn claim_meet_cannot_expand_scope_and_external_execution_stays_blocked() {
         guarantees: BTreeSet::from(["PolicyCompliance".into(), "BoundedMutation".into()]),
         assumptions: BTreeSet::from(["caller_owned_storage".into()]),
         excludes: BTreeSet::from(["scientific_alignment".into()]),
-        evidence_digests: BTreeSet::from(["c".repeat(64)]),
+        evidence_digests: BTreeSet::from([digest(&first_evidence).expect("first evidence digest")]),
         valid_until: 100,
     };
     let second = ClaimEnvelope {
@@ -379,7 +409,9 @@ fn claim_meet_cannot_expand_scope_and_external_execution_stays_blocked() {
         guarantees: BTreeSet::from(["PolicyCompliance".into()]),
         assumptions: BTreeSet::from(["local_rust_runtime".into()]),
         excludes: BTreeSet::from(["production_security".into()]),
-        evidence_digests: BTreeSet::from(["d".repeat(64)]),
+        evidence_digests: BTreeSet::from([
+            digest(&second_evidence).expect("second evidence digest")
+        ]),
         valid_until: 80,
     };
     let met = first.meet(&second).expect("meet-only claim composition");
@@ -387,8 +419,133 @@ fn claim_meet_cannot_expand_scope_and_external_execution_stays_blocked() {
     assert_eq!(met.valid_until, 80);
     assert!(met.excludes.contains("scientific_alignment"));
     assert!(met.excludes.contains("production_security"));
-    let packet =
-        AggregateReleasePacket::from_envelopes("local-e2e", &[met], 20).expect("aggregate packet");
+    let binding = ClaimEvidenceBinding {
+        claim_id: met.claim_id.clone(),
+        subject_digest,
+        evidence_ids: BTreeSet::from(["claim-evidence-a".into(), "claim-evidence-b".into()]),
+    };
+    let packet = AggregateReleasePacket::from_envelopes(
+        "local-e2e",
+        &[met.clone()],
+        &[binding],
+        &evidence,
+        20,
+    )
+    .expect("evidence-bound aggregate packet");
+    packet
+        .validate_current(&[met.clone()], &evidence, 21)
+        .expect("revalidate exact claim and accepted local evidence");
+
+    let candidate = CandidateUpdate {
+        candidate_id: "claim-packet-candidate".into(),
+        base_digest: "a".repeat(64),
+        candidate_digest: "b".repeat(64),
+        rollback_digest: "a".repeat(64),
+        evidence_digest: packet.digest().expect("initial packet digest"),
+    };
+    let mut releases = ReleaseRegistry::default();
+    releases
+        .propose(candidate)
+        .expect("propose local shadow candidate");
+    let mut altered_claim = met.clone();
+    altered_claim.guarantees.insert("ProductionReady".into());
+    assert!(releases
+        .advance_with_packet(
+            "claim-packet-candidate",
+            &packet,
+            &[altered_claim],
+            &evidence,
+            21,
+        )
+        .is_err());
+    assert_eq!(
+        releases.state("claim-packet-candidate"),
+        Some(ReleaseState::Shadow),
+        "invalid packet evidence advanced local release state"
+    );
+    releases
+        .advance_with_packet(
+            "claim-packet-candidate",
+            &packet,
+            &[met.clone()],
+            &evidence,
+            21,
+        )
+        .expect("evidence-bound packet advances shadow to canary");
+    assert_eq!(
+        releases.state("claim-packet-candidate"),
+        Some(ReleaseState::Canary)
+    );
+
+    let next_evidence = Evidence {
+        id: "claim-evidence-c".into(),
+        source_digest: "9".repeat(64),
+        operator_id: "claim-operator-c".into(),
+        validator_id: "claim-validator-c".into(),
+        reviewer_id: "claim-reviewer-c".into(),
+        valid_until: 100,
+        accepted: true,
+        revoked: false,
+    };
+    evidence
+        .insert(next_evidence.clone())
+        .expect("insert next local evidence assertion");
+    let next_claim = ClaimEnvelope {
+        claim_id: "local-canary-evidence".into(),
+        state_slice: STATE_SLICE.into(),
+        claim_ceiling: CLAIM_CEILING.into(),
+        guarantees: BTreeSet::from(["PolicyCompliance".into()]),
+        assumptions: BTreeSet::from(["local_rust_runtime".into()]),
+        excludes: BTreeSet::from(["production_security".into()]),
+        evidence_digests: BTreeSet::from([digest(&next_evidence).expect("next evidence digest")]),
+        valid_until: 90,
+    };
+    let next_binding = ClaimEvidenceBinding {
+        claim_id: next_claim.claim_id.clone(),
+        subject_digest: "9".repeat(64),
+        evidence_ids: BTreeSet::from(["claim-evidence-c".into()]),
+    };
+    let next_packet = AggregateReleasePacket::from_envelopes(
+        "local-canary-packet",
+        &[next_claim.clone()],
+        &[next_binding],
+        &evidence,
+        22,
+    )
+    .expect("second evidence-bound local packet");
+    releases
+        .advance_with_packet(
+            "claim-packet-candidate",
+            &next_packet,
+            &[next_claim],
+            &evidence,
+            22,
+        )
+        .expect("second evidence-bound packet advances to local release metadata");
+    assert_eq!(
+        releases.state("claim-packet-candidate"),
+        Some(ReleaseState::ReleasedLocal)
+    );
+    let release_directory = tempfile::tempdir().expect("release persistence directory");
+    let release_path = release_directory.path().join("release-registry.json");
+    releases
+        .save(&release_path)
+        .expect("persist packet-backed release metadata");
+    evidence
+        .revoke("claim-evidence-a")
+        .expect("revoke prior packet evidence");
+    assert!(packet.validate_current(&[met], &evidence, 23).is_err());
+    assert_eq!(
+        ReleaseRegistry::revalidate_and_save(&release_path, &evidence, 23)
+            .expect("revalidate and persist revocation freeze"),
+        vec!["claim-packet-candidate".to_string()]
+    );
+    let recovered_releases =
+        ReleaseRegistry::load(&release_path).expect("reload frozen packet-backed release metadata");
+    assert_eq!(
+        recovered_releases.state("claim-packet-candidate"),
+        Some(ReleaseState::Frozen)
+    );
     assert!(!packet.raw_payload_included);
     assert_eq!(packet.state_slice, STATE_SLICE);
     assert_eq!(packet.claim_ceiling, CLAIM_CEILING);

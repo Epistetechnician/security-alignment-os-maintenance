@@ -20,7 +20,9 @@ use std::collections::BTreeMap;
 use std::fs::{self, File, OpenOptions};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Component, Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+use std::process::Child;
+#[cfg(target_os = "linux")]
+use std::process::{Command, Stdio};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 pub const PROTOCOL_VERSION: u8 = 1;
@@ -895,6 +897,7 @@ impl Broker {
             job_path,
             &self.workspace,
             launch_token,
+            job.request.max_runtime_ms,
         )?;
         let deadline =
             std::time::Instant::now() + Duration::from_millis(job.request.max_runtime_ms);
@@ -1050,30 +1053,24 @@ fn sandbox_command(
     job: &Path,
     workspace: &Path,
     launch_token: &str,
+    _timeout_ms: u64,
 ) -> std::result::Result<Child, String> {
-    let escaped = workspace.to_string_lossy().replace('"', "\\\"");
-    let contents = format!(
-        "(version 1) (allow default) (deny network*) (deny file-write*) (allow file-read* (subpath \"{escaped}\")) (allow file-write* (subpath \"{escaped}\")) (deny process-exec*) (allow process-exec* (literal \"{}\")) (allow process-fork)",
-        supervisor.to_string_lossy().replace('"', "\\\"")
-    );
-    let child = Command::new("/usr/bin/sandbox-exec")
-        .args([
-            "-p",
-            &contents,
-            supervisor
-                .to_str()
-                .ok_or_else(|| "supervisor_path_failed".to_owned())?,
-        ])
-        .arg("--job")
-        .arg(job)
-        .env_clear()
-        .env("BROKER_LAUNCH_TOKEN", launch_token)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|_| "supervisor_spawn_failed".to_owned());
-    child
+    let args = vec![
+        std::ffi::OsString::from("--job"),
+        job.as_os_str().to_owned(),
+    ];
+    let environment = vec![(
+        std::ffi::OsString::from("BROKER_LAUNCH_TOKEN"),
+        std::ffi::OsString::from(launch_token),
+    )];
+    crate::sandbox::spawn_sandboxed(
+        supervisor,
+        &args,
+        &environment,
+        &[workspace.to_path_buf()],
+        None,
+    )
+    .map_err(|_| "supervisor_spawn_failed".to_owned())
 }
 
 #[cfg(target_os = "linux")]
@@ -1082,6 +1079,7 @@ fn sandbox_command(
     job: &Path,
     _workspace: &Path,
     launch_token: &str,
+    _timeout_ms: u64,
 ) -> std::result::Result<Child, String> {
     Command::new("unshare")
         .args([
@@ -1110,6 +1108,7 @@ fn sandbox_command(
     _job: &Path,
     _workspace: &Path,
     _launch_token: &str,
+    _timeout_ms: u64,
 ) -> std::result::Result<Child, String> {
     Err("unsupported_sandbox_platform".into())
 }
@@ -1120,13 +1119,13 @@ fn sandbox_command(
     _job: &Path,
     _workspace: &Path,
     _launch_token: &str,
+    _timeout_ms: u64,
 ) -> std::result::Result<Child, String> {
     Err("unsupported_sandbox_platform".into())
 }
 
 fn terminate_workload(child: &mut Child) {
-    let _ = child.kill();
-    let _ = child.wait();
+    crate::sandbox::terminate_workload(child);
 }
 
 fn read_supervisor_output(child: &mut Child) -> std::result::Result<SupervisorOutcome, String> {

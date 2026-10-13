@@ -5,10 +5,12 @@ State slice: `security-alignment-os-foundation-v1`.
 A runnable Rust-native local reference implementation of the HSAI
 proposal-to-rollback control loop. It integrates evidence review records,
 admission, single-use capabilities, consented specialist memory, a separate
-capability broker process, one sandboxed file transformation, rollback, fixed
-receipts, governance, and audit persistence. It does not run a model or
-establish scientific alignment, authenticated independent review, or
-production readiness.
+capability broker process, one sandboxed file transformation, and a distinct
+transaction-bound multi-file maintenance path over private immutable
+generations. The maintenance evaluator checks patch structure in a separate,
+sandboxed process; it does not run candidate code or candidate tests. The
+repository does not run a model or establish scientific alignment, authenticated
+independent review, or production readiness.
 
 ```text
 consented tenant note + immutable specialist identity
@@ -75,7 +77,7 @@ are installed.
 | `property` | Exhaustive local lattice/lifecycle checks and digest-only invariant reports |
 | `receipts` | Ed25519-signed capability receipts with exact decision binding and local replay rejection |
 | `execution_gate` | Typed sandbox/request boundary that validates controls and remains blocked locally |
-| `broker`, `capability_broker`, `capability_supervisor` | Separate Unix IPC broker, broker-only receipt issuer, staged uppercase file transformation, canonical journal, timeout/kill path, network-denied host sandbox, and frozen crash recovery |
+| `broker`, `capability_broker`, `capability_supervisor`, `sandbox` | Separate Unix IPC broker, broker-only receipt issuer, staged uppercase file transformation, canonical journal, process-group timeout/kill path, bounded child output, network-denied macOS Seatbelt sandbox, and frozen crash recovery |
 | `broker_adversarial_runner` | Separate hostile client for direct supervisor, path escape, replay, forged receipt, malformed child operation, and telemetry containment attempts |
 | `maintenance_replication` | Canonical, signed two-report v2 packet binding the maintenance broker executable digest; legacy v1 packets remain verifiable without that binding |
 | `maintenance_replication_runner` | Operator-controlled freeze, isolated 20-scenario real-process execution, per-launch broker digest checks, private evidence capture, signed host-report production, and packet assembly |
@@ -87,6 +89,7 @@ are installed.
 | `routing` | Digest-only caller-selected specialist routing bound to active tenant consent and immutable identity |
 | `integration` | Evidence-bound workflow execution, receipt-gated execution, lifecycle completion/quarantine, observation, rollback, freeze, and kill disposition |
 | `maintenance` | In-memory fixed-packet workflow contract; hermetic executor only |
+| `maintenance_transaction`, `maintenance_patch_broker`, `maintenance_patch_evaluator` | Transaction-bound replacement of existing allow-listed files across immutable local generations, with signed structural evaluation under macOS Seatbelt or the Linux namespace, Landlock, seccomp, and address-space backend. Uses a fresh per-launch token, bounded evaluator time and output, replay fencing, atomic pointer publication, durable receipts, cancellation, crash recovery, and writer locking. Linux runtime probes require unprivileged user namespaces and Landlock ABI 9 or newer; this checkout only compile-checked the x86_64 backend, without Linux runtime execution or aarch64 compile validation. Candidate code and tests are not run. |
 | `market` | Fixed local sum with job/input commitments, typed exact-offer receipts, result recomputation, binding/timeout/replay checks, and an authorization-required settlement proposal |
 | `governance` | Shadow/canary/local-release records with immutable base, phase evidence, lifecycle validation, and canonical persistence/recovery |
 | `faults` | Deterministic replay, stale-clock, stale-policy, malformed-bytes, partial-write, and kill/freeze scenarios |

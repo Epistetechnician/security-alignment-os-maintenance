@@ -28,46 +28,63 @@ attestation token in stdout. Its image now sets the Confidential Space
 output sink or token-custody workflow. Do not launch it. Protected output
 custody and any hosted execution remain outside this state slice.
 
-The capability broker and maintenance process are separate boundaries. The
-enforcement lane owns `broker.rs`, supervisor binaries, sandbox policy,
-durable execution records, cancellation, and recovery. The fixed maintenance
-process owns one Markdown whitespace transformation, its separate evaluator,
-request binding, and workflow tests. Neither is a generic patch executor.
+The capability broker and maintenance tools remain separate transaction
+boundaries. The enforcement lane owns `broker.rs`, supervisor binaries,
+durable execution records, cancellation, and recovery. Its Linux `unshare`
+path remains separate from the generic transaction sandbox. The fixed
+maintenance process owns one Markdown whitespace transformation. The generic
+local transaction has its own lifecycle and signed receipt, and its pinned
+structural evaluator now has a shared macOS Seatbelt and Linux namespace,
+Landlock, and seccomp launcher. Its Linux code contains x86_64 and aarch64
+paths; only x86_64 cross-compilation has been checked here, and Linux runtime
+probes have not run. Candidate code is not executed.
 
 ## Existing interface and remaining general-operation gap
 
-The current broker accepts `FileTransformRequest` through `BrokerRequest::Execute`
-and returns `BrokerResponse`. It binds source and executable digests, relative
-paths, byte and runtime limits, nonce, and expiry. Its only operation is
-`UppercaseAscii`, writing a previously absent destination. It is not a general
-patch executor. `BrokerResponse::Completed` carries a capability receipt and
+The capability broker still accepts `FileTransformRequest` through
+`BrokerRequest::Execute` and returns `BrokerResponse`. It binds source and
+executable digests, relative paths, byte and runtime limits, nonce, and expiry.
+Its only operation is `UppercaseAscii`, writing a previously absent
+destination. `BrokerResponse::Completed` carries a capability receipt and
 output digest; quarantine and frozen responses represent failure.
 
-Generic maintenance integration needs an explicit request binding the checkout
-baseline, complete patch, frozen evaluation packet, and exact target paths.
-The broker must verify that binding before granting a lease. Cancellation and
-rollback need transaction-bound requests and terminal result receipts; the
-present Hello/Execute interface has neither. A workflow test executor cannot
-substitute for those enforcement operations.
+The new transaction path binds the managed workspace baseline, complete
+replacement patch, exact operator allowlist, evaluator identity and policy,
+patch byte ceilings, evaluator timeout, nonce, and lease. The complete lifecycle
+is detailed in the linked transaction contract. This closes the local
+generic-replacement wiring gap for existing regular files and selects a
+platform-specific sandbox for the structural evaluator. Linux enforcement
+still needs runtime execution on a host with the required namespace and
+Landlock support. Additions, deletions, renames, arbitrary candidate execution,
+and production sandbox authority remain outside its scope.
 
-The implemented [maintenance process boundary](maintenance-process-v1.md)
-preserves the existing broker protocol and exercises signed evaluation and
-durable mutation for a single Markdown whitespace task. Its private-checkout
-trust boundary is explicit; it does not inherit the existing supervisor's
-sandbox or implement a generic patch lease.
+The [fixed maintenance process boundary](maintenance-process-v1.md) preserves
+the existing broker protocol and exercises signed evaluation and durable
+mutation for a single Markdown whitespace task. Its private-checkout trust
+boundary is explicit. The generic transaction uses separate binaries and a
+managed-generation pointer, with its own claim ceiling.
 
 ## Local integration coverage and remaining gate
 
-The local implementation binds the exact request bytes, checkout baseline,
-evaluator executable, fixed input/tests, and policy digests before mutation.
-It rechecks the evaluator's pinned digest immediately before spawning it, then
-rejects stale or mismatched inputs, checks the committed bytes, and restores or
-freezes on failed recovery. The real-process tests cover evaluator replacement
-after broker startup, path escapes, symlinks and hardlinks, changed evaluator
-requirements, cancellation, lease expiry, replay, interrupted commits, and
-concurrent writer fencing. This closes the fixed local operation gate; it does
-not establish generic repository maintenance, inherited sandbox enforcement,
-authenticated identity, or independent replication.
+The fixed process and the generic transaction remain distinct local
+implementations. `tests/maintenance_transaction_e2e.rs` exercises init,
+prepare, broker-launched sandboxed evaluation, commit, and recovery end to end. Its
+cases cover a signed two-file update, stale baseline, disallowed path,
+evaluator replacement, extra candidate edits, expired evaluator receipt,
+cancellation, replay, crash after pointer swap, durable rollback receipt,
+competing writers, and timeout recovery. `tests/maintenance_sandbox_e2e.rs`
+probes filesystem-write denial, a local network connection denial, bounded
+output capture, and process-group termination. These establish local macOS
+protocol, persistence, and sandbox behavior for the tested scope.
+`tests/maintenance_sandbox_linux_e2e.rs` adds strict Linux runtime probes for
+filesystem, IP and Unix-socket network, signal, metadata, namespace-creation,
+inherited-descriptor, address-space, output, and timeout controls. Ordinary
+process and thread creation is still available, without a task-count limit.
+The probes fail when prerequisites are unavailable and have not been executed
+in this checkout. Linux cross-target compilation is not runtime evidence. Neither
+platform's local tests establish candidate test correctness, hostile same-UID
+isolation, authenticated identity, independent Linux reproduction, or
+production readiness.
 
 ## Subsequent gates
 

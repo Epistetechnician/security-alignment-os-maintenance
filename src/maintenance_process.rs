@@ -1085,6 +1085,7 @@ pub fn run(config: &Config, request: &Request) -> Result<Outcome> {
         );
     }
     test_pause("pause-before-finalization", 250);
+    test_pause("expire-before-finalization", 100);
     let final_after = match read_regular_target(&target) {
         Ok(bytes) => bytes,
         Err(error) => {

@@ -1137,6 +1137,57 @@ Run date: 2026-09-27. State slice: `security-alignment-os-foundation-v1`.
   authorization remain open for higher-risk claims and actions. No external
   custody handoff was initiated.
 
+## Transaction-bound multi-file maintenance follow-up
+
+Run date: 2026-09-30. State slice: `security-alignment-os-foundation-v1`.
+
+- Exact target: base Git `HEAD`
+  `44afa112f3ffeb69397c66ff2bd95ba6d86908bf` on
+  `codex/exploratory-adaptation-market-v1`, plus the nine scoped source,
+  integration-test, command, and documentation files listed in
+  `docs/maintenance-transaction-v1.sha256`. The manifest SHA-256 is
+  `293da6cb39ddd91ffda37bd1b443beb052a4e2ea74f050e14289d05cd2dc22e3`.
+  These changes remain uncommitted and unstaged; no push was made.
+- Implementation: added `maintenance_transaction`, the local patch broker,
+  and the pinned structural evaluator. The request binds the full baseline,
+  replacements, exact-path allowlist, evaluator and policy digests, limits,
+  nonce, and lease. Candidate generations are private and inactive until one
+  atomic `current` pointer replacement. Durable state uses a kernel-released
+  advisory writer lock. Recovery restores and verifies the baseline, records
+  a terminal receipt, retains the candidate, and freezes the workspace.
+- Verification: `pnpm run test:e2e` passed, including all 12
+  `maintenance_transaction_e2e` scenarios. `pnpm run lint` passed format
+  checking, all-target tests, the build-contract digest check, and
+  warnings-denied Clippy. After the documentation and manifest update,
+  `pnpm run lint:fast`, the scoped manifest verification, and
+  `pnpm run verify:contract-digest` passed. The all-target
+  `x86_64-unknown-linux-gnu` `cargo check --locked --offline` passed using
+  Rustup `rustc 1.93.1`; it was compile-only and ran no Linux binary.
+- Assurance: `INTERNAL_PASS` for the exact local macOS arm64 tree and checks
+  above. Environment: macOS 26.6.1 arm64, Rustup rustc/Cargo 1.93.1, pnpm
+  9.15.5. Reviewer status: no independent reviewer was engaged and no signed
+  decision was received. Reproducibility status: the tests ran locally; no
+  second runtime environment was used, so this is not `REPRODUCED_LOCAL`.
+- Data and artifact custody: the integration suite uses synthetic source files,
+  synthetic Ed25519 test key material, and temporary local directories that
+  are removed by the test harness. No real-user payload, provider, model,
+  production credential, paid run, external transfer, hosted TEE, or release
+  action was used. The scoped digest manifest is retained in this repository.
+- Known limits and claim ceiling: the transaction only replaces existing
+  regular files at exact allowlisted paths. It does not add, delete, or rename
+  files. The reference evaluator checks transaction and candidate structure;
+  it does not build or execute candidate code or run candidate tests. The path
+  does not inherit the capability broker's OS sandbox and assumes cooperating
+  local processes. Hostile same-UID isolation, power-loss behavior, Linux
+  runtime enforcement, evaluator independence, scientific alignment, and
+  production readiness are unproven. The claim ceiling is local transaction,
+  atomic-publication, replay, and tested crash-recovery behavior only.
+- Next blocked authority gate: independent Linux runtime reproduction with
+  separate operator and evidence custody, repository-specific signed reviewer
+  authority, real host sandbox enforcement, protected platform-attestation
+  custody, and separate deployment authorization remain open. The Linux
+  compile check is not runtime reproduction or reviewer acceptance.
+
 ## Process effective-UID custody follow-up
 
 Run date: 2026-09-27. State slice: `security-alignment-os-foundation-v1`.
@@ -1261,3 +1312,241 @@ Run date: 2026-09-28. State slice: `security-alignment-os-foundation-v1`.
   platform-attestation output validation, and separate deployment
   authorization remain open for higher-risk claims and actions. No external
   custody handoff was initiated.
+
+## macOS-only transaction sandbox baseline (historical)
+
+Run date: 2026-10-01. State slice: `security-alignment-os-foundation-v1`.
+
+- Target identity: base revision
+  `44afa112f3ffeb69397c66ff2bd95ba6d86908bf` on branch
+  `codex/exploratory-adaptation-market-v1`, plus the working-tree bytes listed
+  in `docs/maintenance-sandbox-v1.sha256`. The manifest SHA-256 is
+  `66811c7fadbb993efaa6a14df7491a10df86a0b3575289a9ca9723527a0f5c8f`.
+  Changes remain unstaged and uncommitted; nothing was pushed.
+- Implementation: maintenance transaction evaluators now run through the
+  shared macOS Seatbelt launcher with a fresh launch token, a configured
+  timeout, bounded output capture, and process-group termination on timeout.
+  The capability broker reuses the launcher. Linux transaction evaluation
+  fails closed as unsupported. The evaluator validates transaction structure
+  and bindings; it does not build or execute candidate code or its tests.
+- Validation: `cargo fmt --all -- --check`, `pnpm run lint`, and
+  `pnpm run test:e2e` passed on the local Mac. This includes 13 maintenance
+  transaction scenarios and 5 sandbox E2E tests for filesystem write denial,
+  loopback network denial, bounded output, and timeout cleanup. A locked,
+  offline `cargo check --all-targets --target x86_64-unknown-linux-gnu`
+  succeeded; this was compile-only and executed no Linux binary. The 13-file
+  working-tree manifest was verified with `shasum -a 256 -c`.
+- Environment: macOS 26.6.1, arm64; Rust 1.87.0; Cargo 1.87.0; pnpm 9.15.5.
+- Assurance: `INTERNAL_PASS` for the listed local checks and manifest-bound
+  files. Reviewer status: no signed independent review was requested or
+  received. Reproducibility status: local macOS execution only; the Linux check
+  was compile-only, so neither `REPRODUCED_LOCAL` nor independent Linux
+  reproduction is established.
+- Data and artifact custody: synthetic transaction fixtures, temporary test
+  directories, and a local evaluator seed were used. The network-denial probe
+  used only a local loopback listener. No external network service, provider,
+  real-user data, production traffic, paid execution, hosted TEE, or release
+  action was used.
+- Known limitations and claim ceiling: this demonstrates the tested macOS
+  Seatbelt write and network denials, timeout cleanup, and output bound for
+  these local probes. File reads follow the host's default Seatbelt policy;
+  there is no OS memory limit. Linux transaction evaluation has no runtime
+  backend and fails closed. Same-UID host adversaries, power-loss behavior,
+  general candidate-code evaluation, scientific alignment, hosted enforcement,
+  and production readiness are not established.
+- Next engineering gate: implement and exercise Linux transaction sandbox
+  confinement and runtime, and add an OS-enforced memory limit. Independent
+  Linux reproduction with separate operator and evidence custody, signed
+  reviewer authority, protected attestation validation, and separate
+  deployment authorization remain open for higher-risk claims and actions.
+
+## Linux transaction sandbox implementation follow-up
+
+Run date: 2026-10-01. State slice: `security-alignment-os-foundation-v1`.
+
+- Exact source identity: base revision
+  `44afa112f3ffeb69397c66ff2bd95ba6d86908bf` on branch
+  `codex/exploratory-adaptation-market-v1`, plus the 18-file scoped manifest
+  `docs/maintenance-linux-sandbox-v1.sha256`, SHA-256
+  `2e0dc77113303b36fd3ec467fe2c53bf25bd13b60636a20aeb2ed1f7b426bf51`.
+  The manifest binds the implementation/test/docs payload and excludes itself
+  and this assurance report. All entries verified with `shasum -a 256 -c`.
+  Changes remain unstaged and uncommitted; nothing was pushed.
+- Implementation: the transaction evaluator now has a Linux backend using
+  unprivileged user and network namespaces, Landlock ABI 9+, exact writable
+  roots, Unix-socket and signal scoping, capability dropping, seccomp
+  restrictions including denial of namespace creation, close-on-exec for
+  inherited descriptors, `RLIMIT_AS`, bounded output, and process-group timeout
+  cleanup. The address-space limit is bound in the signed evaluation job and
+  receipt. The
+  evaluator remains manifest-only and does not compile or execute candidate
+  code or tests.
+- Validation: `cargo fmt --all -- --check`, the focused macOS sandbox and
+  transaction suites (7 and 14 tests), `pnpm run test:e2e`, and `pnpm run lint`
+  passed. The root lint gate included all-target tests, the build-contract
+  digest check, and warnings-denied Clippy. Native `cargo check
+  --all-targets --locked --offline` passed. An isolated Rustup 1.93.1
+  `cargo check --all-targets --target x86_64-unknown-linux-gnu --locked
+  --offline` compiled the Linux-only implementation and test target. The Linux
+  target in the macOS E2E and lint runs executed zero tests due to its Linux-only
+  cfg. Linux-target Clippy was attempted but remained inconclusive because the
+  local Clippy/sysroot toolchain combination was inconsistent.
+- Environment and reproducibility: macOS 26.6.1, arm64, Darwin kernel 25.6.0;
+  native rustc/Cargo 1.87.0 and pnpm 9.15.5; the separate Linux target check
+  used Rustup rustc/Cargo 1.93.1. Linux execution was not performed, so this is
+  not `REPRODUCED_LOCAL` and does not establish Linux runtime behavior. No
+  alternate local Linux VM/runtime executable was found among QEMU, Lima,
+  Multipass, Podman, Colima, VFKit, and Tart; Docker was not retried.
+- Assurance: local macOS tests, static gates, scoped manifest, and the x86_64
+  Linux compile check passed. Linux sandbox assurance is `INCONCLUSIVE` because
+  only compilation was performed. This follow-up does not claim
+  `INTERNAL_PASS`: Linux runtime execution, fuzzing, and a bounded Linux
+  red-team review remain unperformed. Reviewer status: no signed independent
+  review was requested or received. Reproducibility status: only this local
+  macOS environment was used; no second environment ran the frozen procedure.
+- Data and artifact custody: test inputs were synthetic; temporary files and
+  the macOS loopback listener were test-owned and used locally. Linux probe
+  source defines temporary filesystem and loopback/pathname/abstract-socket
+  fixtures, but those Linux probes did not execute. No external network
+  service, provider, real-user data, credential, paid execution, hosted TEE,
+  production traffic, remote worker, or release action was used.
+- Known limitations and claim ceiling: Linux runtime behavior remains
+  unverified; only x86_64 cross-compilation was checked, while aarch64 was not
+  compiled. Linux runtime requires unprivileged user/network namespaces and
+  Landlock ABI 9 or newer plus `close_range` close-on-exec support. `RLIMIT_AS`
+  bounds virtual address space, not
+  resident memory; the backend has no PID namespace or cgroup task limit, and
+  process/thread creation is not capped. Reads follow host filesystem
+  permissions, and hostile same-UID isolation is not established. macOS does
+  not enforce this address-space limit. No candidate
+  tests, semantic patch correctness, independent Linux reproduction, reviewer
+  authority, scientific alignment, hosted enforcement, or production readiness
+  is established.
+- Next blocked gate: run the strict Linux sandbox integration suite on a native
+  Linux host with the required namespace and Landlock features, retaining the
+  exact source/toolchain/fixture/output identity. Independently administered
+  Linux reproduction, separate operator and evidence custody, signed reviewer
+  authority, protected attestation validation, and separate deployment
+  authorization remain open for higher-risk claims and actions.
+
+## Follow-up Linux ARM64 transaction and sandbox runtime
+
+Run date: 2026-10-01. State slice: `security-alignment-os-foundation-v1`.
+
+- Change: transaction E2E is no longer compiled out on Linux. Its configuration
+  now binds the Linux evaluator address-space limit while retaining `null` on
+  macOS, and its signed-receipt tamper case changes the value in either
+  direction. Running it under Linux exposed a three-second request lease that
+  could expire during broker startup under parallel load; the synthetic expiry
+  case now allows 30 seconds for evaluation before waiting for expiry. The
+  AArch64 seccomp metadata filter uses that architecture's syscall table,
+  including `fchmodat2` syscall 452, and omits x86-only legacy syscall entries.
+  Linux Clippy also caught and removed a redundant `SECCOMP_RET_ALLOW` cast.
+- Exact tested identity: branch `codex/exploratory-adaptation-market-v1`, base
+  Git `HEAD` `44afa112f3ffeb69397c66ff2bd95ba6d86908bf`; 111-file working-tree
+  manifest SHA-256 `9381e190a4836edc7acfd7f7a16adff1554a98f8289afc32a88f5989e5827b9d`,
+  excluding this self-report document. The manifest sorts tracked and
+  untracked nonignored paths and hashes the big-endian path length, path,
+  permission mode, file/link marker, payload length, and payload bytes. The 59
+  Rust implementation and test files have SHA-256
+  `5bc52d611167f807bd95a4d1c9229649609046363a7c8edad89274f4e9e0f006` using
+  sorted paths and length-prefixed path and source bytes. `Cargo.lock` SHA-256
+  is `14f922d6a0ee38d5f7cf027642c309264686360369aff0de5fc408be17533a27`.
+  The exact source archive used for the final Linux run has SHA-256
+  `81371f19b9756198ceb179315aed21aeb71b811955a2617d2fa60a536e90fd30`.
+- Environment and dependencies: a same-owner Lima 2.2.0 ARM64 VM on this Mac;
+  Ubuntu 26.10 development image SHA-256
+  `e080344a1535e14e4214c59ecb064d38dff1bb3a0b7d21151a811eda047f4a34`, Linux
+  kernel `7.3.0-5-generic`, rustc and Cargo 1.97.1, Clippy 0.1.97, and Landlock
+  ABI 11. Unprivileged user/network namespaces were enabled in this disposable
+  VM by setting `kernel.apparmor_restrict_unprivileged_userns=0`. Cargo ran
+  offline with the vendored dependency archive SHA-256
+  `339299bbef4402c9725a2b0f58542ebdc4840d4608020de2cce0216efa4b9b94`.
+- Results: `cargo test --locked --offline --all-targets` exited 0 with 249
+  passed and 0 failed across 32 test targets; output SHA-256
+  `3f87445c724ee2782cca1fe7bda54075f496648c7f6d58cde90a8f4da9e738bd`. This
+  includes 14 transaction lifecycle tests and all 10 Linux sandbox runtime
+  probes. The macOS-only Seatbelt target correctly ran zero tests on Linux.
+  `cargo clippy --locked --offline --all-targets -- -D warnings` exited 0;
+  output SHA-256
+  `961e3bb7824b57b58abf7945cc0a92c87f88fdb9f7356eb948e03992577d5511`.
+  On macOS, `CARGO_NET_OFFLINE=true pnpm run lint` exited 0 with 246 passed
+  and 0 failed across 31 test targets; formatting, the build-contract digest,
+  and warnings-denied Clippy passed. Its output SHA-256 is
+  `165a25ddc14934363ce1f3d5567f61958b9d3ae35bb7615bab9014c7cb620d1a`.
+  `cargo fmt --all -- --check`, all three scoped transaction/sandbox manifests,
+  and `git diff --check` also passed on the Mac.
+- Assurance: `INTERNAL_PASS` on the local Mac gates and `REPRODUCED_LOCAL` for
+  the recorded same-owner Linux VM procedure and source archive. This is not
+  independent Host B reproduction. Reviewer status: no repository-specific
+  signed independent decision was requested or received.
+- Data and artifact custody: deterministic inline synthetic fixtures only.
+  The source archive and test/Clippy logs were retained in local temporary
+  storage; Cargo test execution was offline. Ubuntu packages used to provision
+  Clippy came from the signed Ubuntu archive. No model, provider, production
+  traffic, real-user payload, remote worker, credential, paid run, or external
+  evidence custody was used.
+- Known limitations and claim ceiling: this is local subprocess and sandbox
+  behavior under the named development kernel and the VM's relaxed user
+  namespace setting. The evaluator validates manifests and exact requested
+  bytes; it does not compile or execute candidate code or tests. Aggregate
+  memory and task limits, hostile same-UID isolation, stable-release Linux
+  behavior, independent operator/evidence custody, semantic patch correctness,
+  scientific alignment, and production security are not established.
+- Next blocked authority gate: independently operated Linux Host B with
+  separate operator and evidence custody; a signed decision from a reviewer
+  authorized for this repository; protected platform-attestation validation;
+  and separate deployment authorization. The scientific alignment claim
+  remains closed.
+
+## Evidence-bound claim packet and local release follow-up
+
+Run date: 2026-10-02. State slice: `security-alignment-os-foundation-v1`.
+
+- Exact tested identity: branch `codex/exploratory-adaptation-market-v1`, base
+  Git `HEAD` `44afa112f3ffeb69397c66ff2bd95ba6d86908bf`; 111-file working-tree
+  manifest SHA-256
+  `37aebe1604ee5c73a85a5853fa155ac72d0537dee06d9a8776bf19dd727ecfd0`,
+  excluding this self-report document. The manifest covers sorted tracked and
+  nonignored untracked files and hashes 8-byte big-endian path length, path,
+  4-byte mode, file/link marker, 8-byte payload length, and file or symlink
+  target bytes. The 59 Rust source and test files have SHA-256
+  `8375fca65b7d51879c9d5857ffd028adf110878400419f179655a77d85d0fd87` using
+  sorted paths and length-prefixed path and source bytes. `Cargo.lock` SHA-256
+  is `14f922d6a0ee38d5f7cf027642c309264686360369aff0de5fc408be17533a27`.
+- Change: aggregate release packets now bind each claim ID to the complete
+  envelope digest, preserve claim-to-subject and claim-to-evidence bindings,
+  and validate that each evidence record is accepted, current, unrevoked, and
+  valid for the claim's full interval. `ReleaseRegistry::advance_with_packet`
+  validates packet contents before moving local shadow/canary state and stores
+  the aggregate packet with its claim envelopes. The E2E path rejects claim
+  edits without state mutation, advances using a second packet backed by a
+  distinct evidence record, then reloads the registry, detects a revoked prior
+  record, and persists a terminal freeze through `revalidate_and_save`.
+- Environment: macOS 26.6.1 arm64; rustc and Cargo 1.87.0; pnpm 9.15.5;
+  `CARGO_NET_OFFLINE=true`.
+- Results: `CARGO_NET_OFFLINE=true pnpm run lint` exited 0. This ran formatting,
+  all-target Rust tests, the build-contract digest check, and warnings-denied
+  Clippy. The focused claim-packet unit tests passed 5/5, and
+  `tests/security_thesis_e2e.rs` passed 11/11. `git diff --check` passed.
+- Assurance: `INTERNAL_PASS` for the exact local Mac working-tree identity
+  above. No second-environment reproduction was performed for this identity;
+  the prior same-owner Linux VM run applies to its recorded earlier source
+  digest, not this follow-up. Reviewer status: no repository-specific signed
+  decision was requested or received.
+- Data and artifact custody: deterministic inline synthetic evidence records
+  only, held in memory during tests. No external custody, reviewer service,
+  production payload, provider, model, network worker, or paid execution was
+  used.
+- Known limitations and claim ceiling: local evidence-registry checks and
+  local release metadata only. Role identities remain caller assertions;
+  evidence truth, identity authenticity, physical custody and deletion,
+  an automatically running revocation monitor, public claim publication,
+  scientific alignment, and deployment security are not established. The
+  caller must invoke revalidation; the packet cannot grant deployment or
+  production authority.
+- Next local gap: choose and wire the local lifecycle trigger that invokes
+  `revalidate_and_save`; the repository has no background scheduler or
+  service. Next blocked authority gates remain a repository-authorized signed
+  reviewer decision and separate deployment authorization; independent Linux
+  reproduction for this exact source identity was not performed.

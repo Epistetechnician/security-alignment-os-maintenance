@@ -13,7 +13,7 @@ use std::io::Read;
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
 use std::thread;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tempfile::TempDir;
 
 fn timestamp() -> u64 {
@@ -136,16 +136,24 @@ fn start_broker(
     }
     let mut child = command.spawn().expect("broker spawn");
     let client = BrokerClient::new(socket);
-    for _ in 0..200 {
-        if client.hello().is_ok() {
-            return (child, client);
+    // Debug broker binaries can be large; broker startup hashes the pinned
+    // supervisor twice before binding the socket. Keep a bounded but less
+    // timing-sensitive window for slower Linux hosts and parallel test runs.
+    let startup_deadline = Instant::now() + Duration::from_secs(10);
+    let mut last_hello_error = None;
+    while Instant::now() < startup_deadline {
+        match client.hello() {
+            Ok(_) => return (child, client),
+            Err(error) => last_hello_error = Some(error.to_string()),
         }
         if let Some(status) = child.try_wait().expect("broker startup status") {
             let mut stderr = String::new();
             if let Some(mut output) = child.stderr.take() {
                 let _ = output.read_to_string(&mut stderr);
             }
-            panic!("broker exited before IPC hello ({status}): {stderr}");
+            panic!(
+                "broker exited before IPC hello ({status}): {stderr}; last hello error: {last_hello_error:?}"
+            );
         }
         thread::sleep(Duration::from_millis(10));
     }
@@ -155,7 +163,9 @@ fn start_broker(
     if let Some(mut output) = child.stderr.take() {
         let _ = output.read_to_string(&mut stderr);
     }
-    panic!("broker did not accept IPC hello before timeout: {stderr}");
+    panic!(
+        "broker did not accept IPC hello before timeout: {stderr}; last hello error: {last_hello_error:?}"
+    );
 }
 
 #[test]

@@ -37,9 +37,11 @@ broker independently rechecks the original source and committed output. A
 timeout, failed supervisor, changed source, invalid output, or journal failure
 removes the destination when possible, records rollback, and freezes further
 admission. On macOS the backend uses `/usr/bin/sandbox-exec` with network and
-file-write denial plus an exact supervisor executable allowance. On Linux it
-uses an unprivileged user, network, and PID namespace through `unshare`; if
-that primitive is unavailable the request fails closed.
+file-write denial plus an exact supervisor executable allowance. The shared
+macOS launcher places the workload in its own process group so timeout
+termination reaps its descendants. On Linux it uses an unprivileged user,
+network, and PID namespace through `unshare`; if that primitive is unavailable
+the request fails closed.
 The broker resolves the configured supervisor to a canonical absolute path
 before pinning and launching it, so Seatbelt's literal process-execution rule
 matches the path macOS resolves through parent-directory aliases. A final

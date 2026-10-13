@@ -140,9 +140,13 @@ of external custody or deletion.
 bounded raw-retention interval, exact artifact digest, validator assertion, and
 terminal owner deletion record. The artifact-bound workflow checks the
 declared root ID, digest, and logical retention interval before admission.
-`claims::ClaimEnvelope` composes evidence by meet only, while
-`AggregateReleasePacket` retains claim IDs and evidence digests without raw
-payloads. Both remain caller-owned local records.
+`claims::ClaimEnvelope` composes claim metadata by meet only.
+`AggregateReleasePacket` requires each claim's evidence IDs and subject digest,
+matches them to current accepted `EvidenceRegistry` records, commits the full
+claim envelope, and can revalidate freshness and revocation before local use.
+It retains aggregate digests without raw payloads. Reviewer/operator/validator
+identities are still caller assertions; this does not verify physical custody,
+evidence truth, public publication, or release authority.
 
 `checker` independently recomputes replay, audit and fixed-receipt invariants
 for local regression. Its result is not independent acceptance evidence.
@@ -186,11 +190,17 @@ verified/reserved sets support canonical caller-owned save/load/recovery. No
 provider, wallet, chain, zero-knowledge, FHE, or MPC workload runs.
 
 `governance::ReleaseRegistry` preserves an immutable base and rollback target.
-Shadow and canary advances require the candidate's first evidence digest, then a
-distinct lowercase digest for the next phase. `freeze` is terminal metadata; it
-does not deploy an adapter or authorize an external executor. Registry
-snapshots validate candidate identity, phase evidence cardinality, and
-canonical bytes before save/load/recovery.
+`advance_with_packet` validates the full claim envelope and current
+subject-bound evidence before moving shadow to canary or canary to local
+release metadata. The first packet digest must match the candidate's declared
+evidence; the next phase requires a distinct packet digest. It retains the
+aggregate packet and claim envelopes so `revalidate_and_save` can load the
+registry, recheck current evidence, and persist terminal freezes after expiry
+or revocation. The caller must invoke revalidation; there is no background
+monitor. `freeze` is terminal metadata; these local transitions do not deploy
+an adapter or authorize an external executor. Registry snapshots validate
+candidate identity, packet cardinality, claim commitments, and canonical bytes
+before save/load/recovery.
 
 `specialist::SpecialistRegistry` and `specialist::ToolRegistry` use the shared
 locked snapshot path. `specialist::ConsentRegistry` uses its purpose-specific

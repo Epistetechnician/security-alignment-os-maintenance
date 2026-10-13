@@ -12,7 +12,7 @@ use std::fs;
 use std::os::unix::fs::{symlink, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Output, Stdio};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tempfile::TempDir;
 
 const BEFORE: &[u8] = b"# Maintenance  \r\nUseful documentation.   \nlast line  ";
@@ -168,14 +168,30 @@ impl Fixture {
     }
 }
 
-fn wait_for_bytes(path: &Path, expected: &[u8]) {
-    for _ in 0..1_000 {
+fn wait_for_bytes(child: &mut Child, path: &Path, expected: &[u8]) {
+    // Parallel debug-process tests hash multi-megabyte evaluator binaries;
+    // allow slower local Linux hosts enough time to reach the failpoint.
+    let deadline = Instant::now() + Duration::from_secs(30);
+    loop {
         if fs::read(path).ok().as_deref() == Some(expected) {
             return;
         }
-        std::thread::sleep(std::time::Duration::from_millis(5));
+        if let Some(status) = child.try_wait().expect("maintenance broker status") {
+            panic!(
+                "maintenance broker exited before {} reached expected bytes ({status})",
+                path.display()
+            );
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            let status = child.wait().expect("reap timed out maintenance broker");
+            panic!(
+                "timed out waiting for {} after 30 seconds; maintenance broker terminated with {status}",
+                path.display()
+            );
+        }
+        std::thread::sleep(Duration::from_millis(10));
     }
-    panic!("timed out waiting for {}", path.display());
 }
 
 fn wait_for_path(path: &Path) {
@@ -384,9 +400,9 @@ fn lease_expiry_during_evaluation_never_mutates() {
 #[test]
 fn cancellation_immediately_before_finalization_rolls_back() {
     let fixture = Fixture::new();
-    let child = fixture.spawn(Some("pause-before-finalization"), Some(500));
+    let mut child = fixture.spawn(Some("pause-before-finalization"), Some(500));
     let target = fixture.config.checkout_root.join("README.md");
-    wait_for_bytes(&target, AFTER);
+    wait_for_bytes(&mut child, &target, AFTER);
     fs::write(&fixture.config.cancellation_file, b"operator cancellation").unwrap();
     let output = child.wait_with_output().unwrap();
     assert!(output.status.success());
@@ -399,9 +415,9 @@ fn cancellation_immediately_before_finalization_rolls_back() {
 #[test]
 fn expiry_immediately_before_finalization_rolls_back() {
     let fixture = Fixture::new();
-    let child = fixture.spawn(Some("expire-before-finalization"), Some(100));
+    let mut child = fixture.spawn(Some("expire-before-finalization"), Some(100));
     let target = fixture.config.checkout_root.join("README.md");
-    wait_for_bytes(&target, AFTER);
+    wait_for_bytes(&mut child, &target, AFTER);
     let output = child.wait_with_output().unwrap();
     assert!(output.status.success());
     let result: Value = serde_json::from_slice(&output.stdout).unwrap();
@@ -413,9 +429,9 @@ fn expiry_immediately_before_finalization_rolls_back() {
 #[test]
 fn rollback_preserves_a_concurrent_target_change() {
     let fixture = Fixture::new();
-    let child = fixture.spawn(Some("pause-before-finalization"), Some(500));
+    let mut child = fixture.spawn(Some("pause-before-finalization"), Some(500));
     let target = fixture.config.checkout_root.join("README.md");
-    wait_for_bytes(&target, AFTER);
+    wait_for_bytes(&mut child, &target, AFTER);
     fs::write(&target, b"concurrent target change\n").unwrap();
     let output = child.wait_with_output().unwrap();
     assert!(output.status.success());
@@ -428,9 +444,9 @@ fn rollback_preserves_a_concurrent_target_change() {
 #[test]
 fn completion_state_failure_restores_before_returning_error() {
     let fixture = Fixture::new();
-    let child = fixture.spawn(Some("pause-before-finalization"), Some(500));
+    let mut child = fixture.spawn(Some("pause-before-finalization"), Some(500));
     let target = fixture.config.checkout_root.join("README.md");
-    wait_for_bytes(&target, AFTER);
+    wait_for_bytes(&mut child, &target, AFTER);
     mode(&fixture.config.state_dir, 0o500);
     let output = child.wait_with_output().unwrap();
     mode(&fixture.config.state_dir, 0o700);

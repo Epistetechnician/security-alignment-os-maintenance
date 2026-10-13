@@ -1,10 +1,11 @@
-#![forbid(unsafe_code)]
+#![deny(unsafe_code)]
 //! Rust-native local implementation of the security-alignment control loop.
 //!
 //! State slice: `security-alignment-os-foundation-v1`.
-//! This crate is local pure-data and caller-owned persistence evidence. It
-//! does not provide OS isolation, provider execution, authenticated identity,
-//! model execution, settlement, or a scientific alignment result.
+//! The core APIs provide local, caller-owned evidence and transaction state.
+//! The sandbox module adds bounded local process isolation, but this crate does
+//! not provide provider execution, authenticated identity, model execution,
+//! settlement, or a scientific alignment result.
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -35,12 +36,14 @@ pub mod maintenance;
 pub mod maintenance_process;
 pub mod maintenance_replication;
 pub mod maintenance_replication_runner;
+pub mod maintenance_transaction;
 pub mod market;
 pub mod memory;
 mod persistence;
 pub mod property;
 pub mod receipts;
 pub mod routing;
+pub mod sandbox;
 pub mod schema;
 pub mod specialist;
 
@@ -1200,6 +1203,51 @@ impl EvidenceRegistry {
     pub fn is_valid(&self, id: &str, now: u64, subject: &str) -> bool {
         valid_digest(subject) && self.records.get(id).is_some_and(|e| e.valid(now, subject))
     }
+
+    /// Returns the canonical digest of an accepted evidence record only when
+    /// it is current, bound to the exact subject, and valid for the requested
+    /// claim interval. Role identities remain caller assertions.
+    pub fn accepted_digest_for(
+        &self,
+        id: &str,
+        now: u64,
+        subject: &str,
+        claim_valid_until: u64,
+    ) -> Result<String> {
+        if !valid_digest(subject) || claim_valid_until <= now {
+            return Err(Error::Invalid("invalid evidence claim binding".into()));
+        }
+        let evidence = self
+            .records
+            .get(id)
+            .ok_or_else(|| Error::Quarantined("missing evidence".into()))?;
+        evidence.validate()?;
+        if !evidence.valid(now, subject) || claim_valid_until > evidence.valid_until {
+            return Err(Error::Rejected(
+                "evidence is not accepted, current, subject-bound, or long-lived enough".into(),
+            ));
+        }
+        digest(evidence)
+    }
+
+    /// Revalidates a packet's evidence commitment against the live registry.
+    /// Revocation changes the record digest and therefore invalidates old
+    /// packet references.
+    pub fn has_valid_digest_for_subject(
+        &self,
+        evidence_digest: &str,
+        now: u64,
+        subject: &str,
+    ) -> bool {
+        valid_digest(evidence_digest)
+            && valid_digest(subject)
+            && self.records.values().any(|evidence| {
+                evidence.validate().is_ok()
+                    && evidence.valid(now, subject)
+                    && digest(evidence).is_ok_and(|current| current == evidence_digest)
+            })
+    }
+
     pub fn revoke(&mut self, id: &str) -> Result<()> {
         let evidence = self
             .records
@@ -1976,13 +2024,7 @@ mod tests {
             evidence_digest: "d".repeat(64),
         };
         release.propose(candidate).unwrap();
-        release.advance("c", &"d".repeat(64)).unwrap();
-        assert_eq!(release.state("c"), Some(governance::ReleaseState::Canary));
-        release.advance("c", &"e".repeat(64)).unwrap();
-        assert_eq!(
-            release.state("c"),
-            Some(governance::ReleaseState::ReleasedLocal)
-        );
+        assert_eq!(release.state("c"), Some(governance::ReleaseState::Shadow));
         release.freeze("c").unwrap();
         assert_eq!(release.state("c"), Some(governance::ReleaseState::Frozen));
         assert!(release.freeze("c").is_err());

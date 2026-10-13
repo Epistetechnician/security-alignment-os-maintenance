@@ -1,0 +1,6 @@
+# State slice: security-alignment-os-foundation-v1.
+# Apple ld64 otherwise permits input metadata such as compilation time to
+# affect the linked Mach-O identity. Keep release artifacts reproducible across
+# independently administered macOS hosts.
+[target.aarch64-apple-darwin]
+rustflags = ["-C", "link-arg=-Wl,-reproducible"]

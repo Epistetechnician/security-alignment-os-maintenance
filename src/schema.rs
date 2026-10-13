@@ -6,10 +6,10 @@
 //! lowercase SHA-256 digests. It does not parse schemas, fetch definitions,
 //! or prove that a producer followed one.
 
+use crate::persistence::{read_regular_snapshot, recover_atomic_snapshot, save_atomic_snapshot};
 use crate::{canonical_bytes, valid_digest, Error, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
-use std::fs;
 use std::path::Path;
 
 pub const STATE_SLICE: &str = "security-alignment-os-foundation-v1";
@@ -114,14 +114,11 @@ impl SchemaRegistry {
             version: FORMAT_VERSION,
             records: self.records.values().cloned().collect(),
         };
-        let temporary = path.with_extension("tmp");
-        fs::write(&temporary, canonical_bytes(&document)?)?;
-        fs::rename(temporary, path)?;
-        Ok(())
+        save_atomic_snapshot(path, &canonical_bytes(&document)?, "schema registry")
     }
 
     pub fn load(path: &Path) -> Result<Self> {
-        let bytes = fs::read(path)?;
+        let bytes = read_regular_snapshot(path)?;
         let document: SchemaDocument = serde_json::from_slice(&bytes)?;
         if document.version != FORMAT_VERSION || canonical_bytes(&document)? != bytes {
             return Err(Error::Journal(
@@ -137,16 +134,7 @@ impl SchemaRegistry {
     }
 
     pub fn recover(path: &Path) -> Result<Self> {
-        match Self::load(path) {
-            Ok(registry) => Ok(registry),
-            Err(Error::Persistence(error)) if error.kind() == std::io::ErrorKind::NotFound => {
-                let temporary = path.with_extension("tmp");
-                let registry = Self::load(&temporary)?;
-                fs::rename(temporary, path)?;
-                Ok(registry)
-            }
-            Err(error) => Err(error),
-        }
+        recover_atomic_snapshot(path, "schema registry", Self::load)
     }
 }
 

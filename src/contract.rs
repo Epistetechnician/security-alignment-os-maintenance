@@ -8,11 +8,11 @@
 //! kernel. Capability sets are a powerset lattice: no capability silently
 //! implies another capability.
 
+use crate::persistence::{read_regular_snapshot, recover_atomic_snapshot, save_atomic_snapshot};
 use crate::{canonical_bytes, Error as CrateError, Result as CrateResult};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 use std::fmt;
-use std::fs;
 use std::path::Path;
 use thiserror::Error;
 
@@ -436,14 +436,11 @@ impl FailureTracker {
     pub fn save(&self, path: &Path) -> CrateResult<()> {
         self.validate()
             .map_err(|error| CrateError::Invalid(error.to_string()))?;
-        let temporary = path.with_extension("tmp");
-        fs::write(&temporary, canonical_bytes(self)?)?;
-        fs::rename(temporary, path)?;
-        Ok(())
+        save_atomic_snapshot(path, &canonical_bytes(self)?, "failure tracker")
     }
 
     pub fn load(path: &Path) -> CrateResult<Self> {
-        let bytes = fs::read(path)?;
+        let bytes = read_regular_snapshot(path)?;
         let tracker: Self = serde_json::from_slice(&bytes)?;
         if canonical_bytes(&tracker)? != bytes {
             return Err(CrateError::Journal(
@@ -457,16 +454,7 @@ impl FailureTracker {
     }
 
     pub fn recover(path: &Path) -> CrateResult<Self> {
-        match Self::load(path) {
-            Ok(tracker) => Ok(tracker),
-            Err(CrateError::Persistence(error)) if error.kind() == std::io::ErrorKind::NotFound => {
-                let temporary = path.with_extension("tmp");
-                let tracker = Self::load(&temporary)?;
-                fs::rename(temporary, path)?;
-                Ok(tracker)
-            }
-            Err(error) => Err(error),
-        }
+        recover_atomic_snapshot(path, "failure tracker", Self::load)
     }
 }
 

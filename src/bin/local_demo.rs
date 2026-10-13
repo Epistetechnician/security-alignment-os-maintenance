@@ -4,6 +4,7 @@
 
 use security_alignment_os::{
     integration, Action, Claim, Evidence, EvidenceRegistry, Kernel, Policy, Proposal, Runtime,
+    CLAIM_CEILING, STATE_SLICE,
 };
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -72,6 +73,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         },
     )?;
     let mut output = BTreeMap::new();
+    output.insert("state_slice", serde_json::json!(STATE_SLICE));
+    output.insert("claim_ceiling", serde_json::json!(CLAIM_CEILING));
     output.insert("result", serde_json::to_value(result)?);
     output.insert(
         "state_digest",

@@ -5,7 +5,7 @@
 //! Routing is a caller-selected local contract. It never receives raw prompt
 //! content, classifies a request, loads a model, or invokes a specialist.
 
-use crate::specialist::{ConsentGrant, SpecialistRegistry};
+use crate::specialist::{ConsentGrant, ConsentRegistry, SpecialistRegistry};
 use crate::{digest, valid_digest, Error, Result};
 use serde::{Deserialize, Serialize};
 
@@ -85,6 +85,7 @@ pub struct RoutingDecision {
 impl RoutingDecision {
     pub fn route(
         registry: &SpecialistRegistry,
+        consent_registry: &ConsentRegistry,
         grant: &ConsentGrant,
         request: &RoutingRequest,
         now: u64,
@@ -92,7 +93,7 @@ impl RoutingDecision {
         request.validate()?;
         grant.validate()?;
         if !request.active(now)
-            || !grant.active(now)
+            || !consent_registry.has_active_grant(grant, now)
             || request.tenant_id != grant.tenant_id
             || request.specialist_id != grant.specialist_id
             || request.grant_id != grant.grant_id
@@ -112,13 +113,14 @@ impl RoutingDecision {
             issued_at: now,
             expires_at: request.expires_at.min(grant.expires_at),
         };
-        decision.validate(registry, grant, request, now)?;
+        decision.validate(registry, consent_registry, grant, request, now)?;
         Ok(decision)
     }
 
     pub fn validate(
         &self,
         registry: &SpecialistRegistry,
+        consent_registry: &ConsentRegistry,
         grant: &ConsentGrant,
         request: &RoutingRequest,
         now: u64,
@@ -129,7 +131,7 @@ impl RoutingDecision {
             .resolve(&self.specialist_id, now)
             .ok_or_else(|| Error::Rejected("specialist identity is unavailable".into()))?;
         if !request.active(now)
-            || !grant.active(now)
+            || !consent_registry.has_active_grant(grant, now)
             || self.issued_at > now
             || self.issued_at < request.created_at
             || self.issued_at < grant.issued_at
@@ -168,7 +170,12 @@ mod tests {
         }
     }
 
-    fn setup() -> (SpecialistRegistry, ConsentGrant, RoutingRequest) {
+    fn setup() -> (
+        SpecialistRegistry,
+        ConsentRegistry,
+        ConsentGrant,
+        RoutingRequest,
+    ) {
         let mut registry = SpecialistRegistry::default();
         registry.register(identity()).expect("identity");
         let grant = ConsentGrant::new(
@@ -189,15 +196,20 @@ mod tests {
             90,
         )
         .expect("request");
-        (registry, grant, request)
+        let mut consent_registry = ConsentRegistry::default();
+        consent_registry
+            .grant(grant.clone())
+            .expect("registered grant");
+        (registry, consent_registry, grant, request)
     }
 
     #[test]
     fn routing_binds_consent_identity_and_input_digest() {
-        let (registry, grant, request) = setup();
-        let decision = RoutingDecision::route(&registry, &grant, &request, 20).expect("route");
+        let (registry, consent_registry, grant, request) = setup();
+        let decision = RoutingDecision::route(&registry, &consent_registry, &grant, &request, 20)
+            .expect("route");
         decision
-            .validate(&registry, &grant, &request, 20)
+            .validate(&registry, &consent_registry, &grant, &request, 20)
             .expect("validate");
         assert_eq!(decision.input_digest, request.input_digest);
         assert_eq!(decision.expires_at, 90);
@@ -205,34 +217,81 @@ mod tests {
 
     #[test]
     fn routing_rejects_tampered_request_and_decision() {
-        let (registry, grant, request) = setup();
+        let (registry, consent_registry, grant, request) = setup();
         let mut changed = request.clone();
         changed.input_digest = "d".repeat(64);
-        let decision = RoutingDecision::route(&registry, &grant, &request, 20).expect("route");
-        assert!(decision.validate(&registry, &grant, &changed, 20).is_err());
-        assert!(RoutingDecision::route(&registry, &grant, &changed, 20).is_ok());
+        let decision = RoutingDecision::route(&registry, &consent_registry, &grant, &request, 20)
+            .expect("route");
+        assert!(decision
+            .validate(&registry, &consent_registry, &grant, &changed, 20)
+            .is_err());
+        assert!(RoutingDecision::route(&registry, &consent_registry, &grant, &changed, 20).is_ok());
         let mut tampered = decision;
         tampered.specialist_digest = "e".repeat(64);
-        assert!(tampered.validate(&registry, &grant, &request, 20).is_err());
+        assert!(tampered
+            .validate(&registry, &consent_registry, &grant, &request, 20)
+            .is_err());
     }
 
     #[test]
-    fn routing_rejects_expired_or_revoked_consent() {
-        let (mut registry, grant, request) = setup();
-        assert!(RoutingDecision::route(&registry, &grant, &request, 90).is_err());
+    fn routing_rejects_expired_request_or_revoked_specialist() {
+        let (mut registry, consent_registry, grant, request) = setup();
+        assert!(
+            RoutingDecision::route(&registry, &consent_registry, &grant, &request, 90).is_err()
+        );
         registry.revoke("specialist").expect("revoke");
-        assert!(RoutingDecision::route(&registry, &grant, &request, 20).is_err());
+        assert!(
+            RoutingDecision::route(&registry, &consent_registry, &grant, &request, 20).is_err()
+        );
+    }
+
+    #[test]
+    fn routing_rejects_revoked_or_unregistered_consent() {
+        let (registry, mut consent_registry, grant, request) = setup();
+        let decision = RoutingDecision::route(&registry, &consent_registry, &grant, &request, 20)
+            .expect("route");
+        consent_registry
+            .revoke(&grant.grant_id)
+            .expect("revoke grant");
+        assert!(
+            RoutingDecision::route(&registry, &consent_registry, &grant, &request, 20).is_err()
+        );
+        assert!(decision
+            .validate(&registry, &consent_registry, &grant, &request, 20)
+            .is_err());
+
+        let (registry, consent_registry, _, request) = setup();
+        let unregistered = ConsentGrant::new(
+            "tenant".into(),
+            "specialist".into(),
+            BTreeSet::from(["thread".into()]),
+            0,
+            80,
+        )
+        .expect("unregistered grant");
+        assert!(
+            RoutingDecision::route(&registry, &consent_registry, &unregistered, &request, 20)
+                .is_err()
+        );
     }
 
     #[test]
     fn routing_rejects_decision_issued_before_request_or_consent() {
-        let (registry, grant, request) = setup();
-        let mut decision = RoutingDecision::route(&registry, &grant, &request, 20).expect("route");
+        let (registry, consent_registry, grant, request) = setup();
+        let mut decision =
+            RoutingDecision::route(&registry, &consent_registry, &grant, &request, 20)
+                .expect("route");
         decision.issued_at = 0;
-        assert!(decision.validate(&registry, &grant, &request, 20).is_err());
+        assert!(decision
+            .validate(&registry, &consent_registry, &grant, &request, 20)
+            .is_err());
 
-        let mut decision = RoutingDecision::route(&registry, &grant, &request, 20).expect("route");
+        let mut decision =
+            RoutingDecision::route(&registry, &consent_registry, &grant, &request, 20)
+                .expect("route");
         decision.issued_at = 5;
-        assert!(decision.validate(&registry, &grant, &request, 20).is_err());
+        assert!(decision
+            .validate(&registry, &consent_registry, &grant, &request, 20)
+            .is_err());
     }
 }

@@ -8,10 +8,10 @@
 //! role fields are assertions supplied by the caller; they are not signatures,
 //! authenticated identities, or proof of external custody.
 
+use crate::persistence::{read_regular_snapshot, recover_atomic_snapshot, save_atomic_snapshot};
 use crate::{digest, valid_digest, Error, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
-use std::fs;
 use std::path::Path;
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -26,7 +26,7 @@ pub struct ArtifactManifest {
     pub license: String,
     /// SHA-256 digest of the caller-supplied provenance record.
     pub provenance_digest: String,
-    /// Caller-declared root holding retained bytes.
+    /// Opaque caller-assigned custody root ID; never a filesystem locator.
     pub custody_root: String,
     /// Inclusive beginning of the permitted retention interval.
     pub retention_start: u64,
@@ -365,14 +365,11 @@ impl ArtifactRegistry {
     /// Saves a validated canonical registry snapshot through a temporary path.
     pub fn save(&self, path: &Path) -> Result<()> {
         self.validate()?;
-        let temporary = path.with_extension("tmp");
-        fs::write(&temporary, crate::canonical_bytes(self)?)?;
-        fs::rename(temporary, path)?;
-        Ok(())
+        save_atomic_snapshot(path, &crate::canonical_bytes(self)?, "artifact registry")
     }
 
     pub fn load(path: &Path) -> Result<Self> {
-        let bytes = fs::read(path)?;
+        let bytes = read_regular_snapshot(path)?;
         let registry: Self = serde_json::from_slice(&bytes)?;
         if crate::canonical_bytes(&registry)? != bytes {
             return Err(Error::Journal(
@@ -383,18 +380,9 @@ impl ArtifactRegistry {
         Ok(registry)
     }
 
-    /// Recovers a valid temporary snapshot only when the primary is absent.
+    /// Recovers and promotes a valid pending snapshot under the path lock.
     pub fn recover(path: &Path) -> Result<Self> {
-        match Self::load(path) {
-            Ok(registry) => Ok(registry),
-            Err(Error::Persistence(error)) if error.kind() == std::io::ErrorKind::NotFound => {
-                let temporary = path.with_extension("tmp");
-                let registry = Self::load(&temporary)?;
-                fs::rename(temporary, path)?;
-                Ok(registry)
-            }
-            Err(error) => Err(error),
-        }
+        recover_atomic_snapshot(path, "artifact registry", Self::load)
     }
 }
 

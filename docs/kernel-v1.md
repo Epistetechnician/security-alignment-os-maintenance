@@ -63,18 +63,23 @@ or after expiry are invalid.
 The journal persists canonical JSON with SHA-256 chain entries. Loading requires
 canonical bytes, contiguous sequence numbers, lowercase digest fields, a valid
 previous-digest chain, unique candidate digests, and a matching candidate
-index. Persistence is caller-owned local file plumbing: it does not provide
-cross-process locking, authenticated storage, signatures, OS enforcement,
+index. Replay journal, kernel, runtime, and audit snapshot replacement uses a
+per-path local writer lock, a synced temporary file mode 0600 on Unix, and
+parent-directory sync. This serializes complete snapshot replacements; it does
+not merge stale in-memory snapshots. Persistence remains caller-owned local file plumbing: it
+does not provide authenticated storage, signatures, OS enforcement,
 process isolation, network control, or a trusted clock. Reviewer and agent
 identities are local role assertions. The kernel does not authenticate model
 output, prove semantic correctness, establish alignment, or grant provider or
 financial authority.
 
-`recover(path)` promotes the canonical temporary snapshot only when the primary
-path is absent, covering a crash between temporary write and atomic rename. A
-present but malformed primary remains an error and is never silently replaced.
-The runtime uses the same rule through `RuntimeSnapshot::recover_snapshot`,
-binding state, checkpoints, shutdown flags, and the audit chain together.
+`recover(path)` validates and promotes a pending temporary snapshot even when a
+primary exists, covering a crash after a complete temporary write but before
+atomic rename. A malformed pending snapshot remains an error. Primary and
+pending symlinks are rejected. Recovery uses the same per-path lock as save. If
+a pending temporary file exists, a new save fails closed until recovery resolves
+it. `RuntimeSnapshot::recover_snapshot` uses the same rule while binding state,
+checkpoints, shutdown flags, and the audit chain together.
 `KernelSnapshot` persists the policy, journal, lifecycle records, failure-budget
 state, and global shutdown flags. Private capability issuances are intentionally
 not serialized, so a restarted kernel cannot recreate authority from an

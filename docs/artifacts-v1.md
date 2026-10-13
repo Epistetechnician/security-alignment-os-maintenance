@@ -35,11 +35,14 @@ canonical JSON snapshot through a temporary path; `load` rejects non-canonical
 or invalid bytes; `recover` promotes a valid temporary snapshot only when the
 primary path is absent. The path and filesystem remain caller-owned.
 
-This is local pure-data evidence only. Role strings are caller assertions; the
-module does not authenticate identities, provide signatures, verify a custody
-filesystem, prove license ownership, enforce retention deletion, inspect
-artifact bytes, or establish an external or scientific claim. No provider,
-model, network, settlement, or production execution is involved.
+This is local pure-data evidence only. The artifact-bound integration path
+cross-checks the manifest root ID and subject digest against a live local
+custody record before admission. Role strings and custody declarations are
+caller assertions; the system does not authenticate identities, provide
+signatures, verify a custody filesystem, prove license ownership, enforce
+physical retention or deletion, inspect artifact bytes, or establish an
+external or scientific claim. No provider, model, network, settlement, or
+production execution is involved.
 
 Focused validation:
 

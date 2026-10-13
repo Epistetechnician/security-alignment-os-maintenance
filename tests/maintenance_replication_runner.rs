@@ -1,13 +1,14 @@
 //! Real-process replication runner checks.
 //!
-//! State slice: security-alignment-os-foundation-v1.
+//! State slices: security-alignment-os-foundation-v1 and
+//! maintenance-replication-runner-identity-v3.
 
 use security_alignment_os::maintenance_replication::{ScenarioRole, REQUIRED_SCENARIOS};
 use security_alignment_os::maintenance_replication_runner::{
-    assemble_packet, baseline_manifest, freeze_checkout, generate_seed_file, run_host,
-    FrozenBundle, RunnerSpec,
+    assemble_packet, baseline_manifest, freeze_checkout, generate_seed_file, load_host_report,
+    run_host, FrozenBundle, RunnerSpec,
 };
-use security_alignment_os::STATE_SLICE;
+use security_alignment_os::{canonical_bytes, digest_bytes, STATE_SLICE};
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
@@ -103,8 +104,33 @@ impl Fixture {
 fn host_runner_executes_and_records_all_real_scenarios() {
     let fixture = Fixture::new();
     let spec = fixture.spec("host-a", ScenarioRole::Winner);
-    let report = run_host(&spec).expect("real host report");
+    let spec_path = fixture.root.path().join("host-a-runner-spec.json");
+    fs::write(&spec_path, canonical_bytes(&spec).unwrap()).unwrap();
+    mode(&spec_path, 0o600);
+    let runner_path = PathBuf::from(env!("CARGO_BIN_EXE_maintenance_replication_runner"));
+    let output = Command::new(&runner_path)
+        .args(["report", spec_path.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "runner stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report =
+        load_host_report(&spec.artifact_dir.join("report.json")).expect("real runner report");
     report.validate().expect("signed report");
+    let broker_digest = digest_bytes(&fs::read(&spec.maintenance_broker_path).unwrap());
+    let runner_digest = digest_bytes(&fs::read(&runner_path).unwrap());
+    assert_eq!(report.version, 3);
+    assert_eq!(
+        report.maintenance_broker_executable_digest.as_deref(),
+        Some(broker_digest.as_str())
+    );
+    assert_eq!(
+        report.replication_runner_executable_digest.as_deref(),
+        Some(runner_digest.as_str())
+    );
     assert_eq!(report.scenarios.len(), REQUIRED_SCENARIOS.len());
     assert_eq!(
         fs::read_dir(spec.artifact_dir.join("evidence"))

@@ -2,10 +2,11 @@
 //!
 //! State slice: `security-alignment-os-foundation-v1`.
 
+use crate::claims::{AggregateReleasePacket, ClaimEnvelope};
+use crate::persistence::{read_regular_snapshot, recover_atomic_snapshot, save_atomic_snapshot};
 use crate::{canonical_bytes, digest, valid_digest, Error, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
-use std::fs;
 use std::path::Path;
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -51,17 +52,28 @@ pub enum ReleaseState {
     Frozen,
 }
 
+/// Aggregate claim material retained so release evidence can be rechecked
+/// after the registry is reloaded.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct ReleaseEvidencePacket {
+    pub packet: AggregateReleasePacket,
+    pub envelopes: Vec<ClaimEnvelope>,
+}
+
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 pub struct ReleaseRegistry {
     records: BTreeMap<String, (CandidateUpdate, ReleaseState)>,
     used_evidence: BTreeMap<String, BTreeSet<String>>,
+    packets: BTreeMap<String, Vec<ReleaseEvidencePacket>>,
 }
 
 impl ReleaseRegistry {
     pub fn validate(&self) -> Result<()> {
-        if self.records.len() != self.used_evidence.len() {
+        if self.records.len() != self.used_evidence.len()
+            || self.records.len() != self.packets.len()
+        {
             return Err(Error::Invalid(
-                "release evidence index is inconsistent".into(),
+                "release evidence indexes are inconsistent".into(),
             ));
         }
         for (id, (candidate, state)) in &self.records {
@@ -73,6 +85,46 @@ impl ReleaseRegistry {
                 .used_evidence
                 .get(id)
                 .ok_or_else(|| Error::Invalid("release evidence record is missing".into()))?;
+            let packets = self
+                .packets
+                .get(id)
+                .ok_or_else(|| Error::Invalid("release packet records are missing".into()))?;
+            let expected_packet_count = match state {
+                ReleaseState::Shadow => 0,
+                ReleaseState::Canary => 1,
+                ReleaseState::ReleasedLocal => 2,
+                ReleaseState::Frozen if packets.len() <= 2 => packets.len(),
+                ReleaseState::Frozen => {
+                    return Err(Error::Invalid(
+                        "frozen release has too many evidence packets".into(),
+                    ))
+                }
+            };
+            if packets.len() != expected_packet_count {
+                return Err(Error::Invalid(
+                    "release state and packet count are inconsistent".into(),
+                ));
+            }
+            let mut packet_digests = BTreeSet::new();
+            for packet in packets {
+                packet.packet.validate_claims(&packet.envelopes)?;
+                let packet_digest = packet.packet.digest()?;
+                if !packet_digests.insert(packet_digest) {
+                    return Err(Error::Invalid("release packet was reused".into()));
+                }
+            }
+            if &packet_digests != used {
+                return Err(Error::Invalid(
+                    "release packet digest index is inconsistent".into(),
+                ));
+            }
+            if let Some(packet) = packets.first() {
+                if packet.packet.digest()? != candidate.evidence_digest {
+                    return Err(Error::Invalid(
+                        "initial release packet does not match candidate evidence".into(),
+                    ));
+                }
+            }
             if !used.contains(&candidate.evidence_digest)
                 && !matches!(state, ReleaseState::Shadow | ReleaseState::Frozen)
             {
@@ -121,14 +173,42 @@ impl ReleaseRegistry {
         if !self.records.contains_key(&candidate_id) {
             return Err(Error::Invalid("candidate was not recorded".into()));
         }
-        self.used_evidence.insert(candidate_id, BTreeSet::new());
+        self.used_evidence
+            .insert(candidate_id.clone(), BTreeSet::new());
+        self.packets.insert(candidate_id, Vec::new());
         self.validate()?;
         Ok(())
     }
     pub fn state(&self, id: &str) -> Option<ReleaseState> {
         self.records.get(id).map(|(_, state)| *state)
     }
-    pub fn advance(&mut self, id: &str, evidence_digest: &str) -> Result<()> {
+    /// Advances local release metadata only when a current evidence-bound
+    /// packet validates against the supplied claim envelopes and registry.
+    pub fn advance_with_packet(
+        &mut self,
+        id: &str,
+        packet: &AggregateReleasePacket,
+        envelopes: &[ClaimEnvelope],
+        evidence: &crate::EvidenceRegistry,
+        now: u64,
+    ) -> Result<()> {
+        packet.validate_current(envelopes, evidence, now)?;
+        let packet_digest = packet.digest()?;
+        let mut staged = self.clone();
+        let packets = staged
+            .packets
+            .get_mut(id)
+            .ok_or_else(|| Error::Invalid("candidate packet state missing".into()))?;
+        packets.push(ReleaseEvidencePacket {
+            packet: packet.clone(),
+            envelopes: envelopes.to_vec(),
+        });
+        staged.advance_digest(id, &packet_digest)?;
+        *self = staged;
+        Ok(())
+    }
+
+    fn advance_digest(&mut self, id: &str, evidence_digest: &str) -> Result<()> {
         let (candidate, state) = self
             .records
             .get_mut(id)
@@ -169,16 +249,60 @@ impl ReleaseRegistry {
         Ok(())
     }
 
+    /// Revalidates retained packets and moves stale active release metadata to
+    /// terminal `Frozen` state. The caller persists the returned registry with
+    /// `save` or uses `revalidate_and_save` for an atomic local update.
+    pub fn revalidate_evidence(
+        &mut self,
+        evidence: &crate::EvidenceRegistry,
+        now: u64,
+    ) -> Result<Vec<String>> {
+        self.validate()?;
+        let mut staged = self.clone();
+        let mut frozen = Vec::new();
+        for (id, (_, state)) in &mut staged.records {
+            if matches!(state, ReleaseState::Shadow | ReleaseState::Frozen) {
+                continue;
+            }
+            let packets = staged
+                .packets
+                .get(id)
+                .ok_or_else(|| Error::Invalid("release packet records are missing".into()))?;
+            if packets.iter().any(|record| {
+                record
+                    .packet
+                    .validate_current(&record.envelopes, evidence, now)
+                    .is_err()
+            }) {
+                *state = ReleaseState::Frozen;
+                frozen.push(id.clone());
+            }
+        }
+        staged.validate()?;
+        *self = staged;
+        Ok(frozen)
+    }
+
+    /// Loads a release registry, revalidates all active evidence packets, and
+    /// atomically persists any terminal freezes before returning their IDs.
+    pub fn revalidate_and_save(
+        path: &Path,
+        evidence: &crate::EvidenceRegistry,
+        now: u64,
+    ) -> Result<Vec<String>> {
+        let mut registry = Self::load(path)?;
+        let frozen = registry.revalidate_evidence(evidence, now)?;
+        registry.save(path)?;
+        Ok(frozen)
+    }
+
     pub fn save(&self, path: &Path) -> Result<()> {
         self.validate()?;
-        let temporary = path.with_extension("tmp");
-        fs::write(&temporary, canonical_bytes(self)?)?;
-        fs::rename(temporary, path)?;
-        Ok(())
+        save_atomic_snapshot(path, &canonical_bytes(self)?, "release registry")
     }
 
     pub fn load(path: &Path) -> Result<Self> {
-        let bytes = fs::read(path)?;
+        let bytes = read_regular_snapshot(path)?;
         let registry: Self = serde_json::from_slice(&bytes)?;
         if canonical_bytes(&registry)? != bytes {
             return Err(Error::Journal(
@@ -190,16 +314,7 @@ impl ReleaseRegistry {
     }
 
     pub fn recover(path: &Path) -> Result<Self> {
-        match Self::load(path) {
-            Ok(registry) => Ok(registry),
-            Err(Error::Persistence(error)) if error.kind() == std::io::ErrorKind::NotFound => {
-                let temporary = path.with_extension("tmp");
-                let registry = Self::load(&temporary)?;
-                fs::rename(temporary, path)?;
-                Ok(registry)
-            }
-            Err(error) => Err(error),
-        }
+        recover_atomic_snapshot(path, "release registry", Self::load)
     }
 }
 
@@ -223,26 +338,37 @@ mod tests {
         registry.propose(candidate()).expect("propose");
         registry.freeze("candidate-1").expect("freeze");
         registry.validate().expect("frozen validation");
-
-        let mut active = ReleaseRegistry::default();
-        active.propose(candidate()).expect("propose");
-        active
-            .advance("candidate-1", &"c".repeat(64))
-            .expect("canary");
-        active
-            .advance("candidate-1", &"d".repeat(64))
-            .expect("release");
-        active.validate().expect("release validation");
-        assert!(active.advance("candidate-1", &"e".repeat(64)).is_err());
+        assert!(registry
+            .advance_with_packet(
+                "candidate-1",
+                &AggregateReleasePacket {
+                    packet_id: "unverified".into(),
+                    state_slice: crate::STATE_SLICE.into(),
+                    claim_ceiling: "local".into(),
+                    claim_ids: ["claim".into()].into_iter().collect(),
+                    claim_digests: [("claim".into(), "a".repeat(64))].into_iter().collect(),
+                    claim_evidence_digests: [(
+                        "claim".into(),
+                        ["b".repeat(64)].into_iter().collect()
+                    )]
+                    .into_iter()
+                    .collect(),
+                    claim_subject_digests: [("claim".into(), "c".repeat(64))].into_iter().collect(),
+                    evidence_digests: ["b".repeat(64)].into_iter().collect(),
+                    generated_at: 1,
+                    raw_payload_included: false,
+                },
+                &[],
+                &crate::EvidenceRegistry::default(),
+                1,
+            )
+            .is_err());
     }
 
     #[test]
     fn persistence_rejects_noncanonical_and_recovers_temp() {
         let mut registry = ReleaseRegistry::default();
         registry.propose(candidate()).expect("propose");
-        registry
-            .advance("candidate-1", &"c".repeat(64))
-            .expect("canary");
         let directory = tempfile::tempdir().expect("directory");
         let path = directory.path().join("release.json");
         registry.save(&path).expect("save");

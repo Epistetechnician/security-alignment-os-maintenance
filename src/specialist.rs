@@ -2,12 +2,18 @@
 //!
 //! State slice: `security-alignment-os-foundation-v1`.
 
+use crate::persistence::{
+    acquire_file_lock, read_regular_snapshot, recover_atomic_snapshot, save_atomic_snapshot,
+    sync_parent_directory,
+};
 use crate::{canonical_bytes, digest, valid_digest, Error, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
-use std::path::Path;
+use std::fs::OpenOptions;
+use std::io::Write;
+use std::path::{Path, PathBuf};
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct SpecialistIdentity {
@@ -100,14 +106,11 @@ impl SpecialistRegistry {
 
     pub fn save(&self, path: &Path) -> Result<()> {
         self.validate()?;
-        let temporary = path.with_extension("tmp");
-        fs::write(&temporary, canonical_bytes(self)?)?;
-        fs::rename(temporary, path)?;
-        Ok(())
+        save_atomic_snapshot(path, &canonical_bytes(self)?, "specialist registry")
     }
 
     pub fn load(path: &Path) -> Result<Self> {
-        let bytes = fs::read(path)?;
+        let bytes = read_regular_snapshot(path)?;
         let registry: Self = serde_json::from_slice(&bytes)?;
         if canonical_bytes(&registry)? != bytes {
             return Err(Error::Journal(
@@ -119,16 +122,7 @@ impl SpecialistRegistry {
     }
 
     pub fn recover(path: &Path) -> Result<Self> {
-        match Self::load(path) {
-            Ok(registry) => Ok(registry),
-            Err(Error::Persistence(error)) if error.kind() == std::io::ErrorKind::NotFound => {
-                let temporary = path.with_extension("tmp");
-                let registry = Self::load(&temporary)?;
-                fs::rename(temporary, path)?;
-                Ok(registry)
-            }
-            Err(error) => Err(error),
-        }
+        recover_atomic_snapshot(path, "specialist registry", Self::load)
     }
 }
 
@@ -205,10 +199,278 @@ impl ConsentGrant {
     }
 }
 
+const CONSENT_FORMAT_VERSION: u8 = 1;
+
+fn write_consent_snapshot(path: &Path, bytes: &[u8]) -> Result<()> {
+    let temporary = path.with_extension("tmp");
+    let mut options = OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = options.open(&temporary)?;
+    file.write_all(bytes)?;
+    file.sync_all()?;
+    drop(file);
+    fs::rename(&temporary, path)?;
+    sync_parent_directory(path)
+}
+
+fn read_consent_snapshot(path: &Path) -> Result<Vec<u8>> {
+    let metadata = fs::symlink_metadata(path)?;
+    if !metadata.is_file() {
+        return Err(Error::Journal(
+            "consent registry snapshot is not a regular file".into(),
+        ));
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if metadata.permissions().mode() & 0o077 != 0 {
+            return Err(Error::Journal(
+                "consent registry snapshot is not owner-only".into(),
+            ));
+        }
+    }
+    Ok(fs::read(path)?)
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+struct ConsentDocument {
+    version: u8,
+    grants: Vec<ConsentGrant>,
+    revoked_grants: BTreeSet<String>,
+}
+
+/// Caller-owned consent registry shared by routing, retrieval, and persistent
+/// memory. Revocation is terminal for a grant ID; a new issuance has a new ID.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct ConsentRegistry {
+    grants: BTreeMap<String, ConsentGrant>,
+    revoked_grants: BTreeSet<String>,
+    persistence_path: Option<PathBuf>,
+}
+
+impl ConsentRegistry {
+    pub fn validate(&self) -> Result<()> {
+        if self
+            .revoked_grants
+            .iter()
+            .any(|grant_id| !valid_digest(grant_id) || self.grants.contains_key(grant_id))
+        {
+            return Err(Error::Invalid("invalid consent revocation ledger".into()));
+        }
+        for (grant_id, grant) in &self.grants {
+            if grant_id != &grant.grant_id {
+                return Err(Error::Invalid("consent registry key mismatch".into()));
+            }
+            grant.validate()?;
+        }
+        Ok(())
+    }
+
+    fn grant_in_memory(&mut self, grant: ConsentGrant) -> Result<()> {
+        grant.validate()?;
+        if self.revoked_grants.contains(&grant.grant_id) {
+            return Err(Error::Rejected("consent grant was revoked".into()));
+        }
+        if self
+            .grants
+            .get(&grant.grant_id)
+            .is_some_and(|registered| registered != &grant)
+        {
+            return Err(Error::Rejected("consent grant identity collision".into()));
+        }
+        self.grants.insert(grant.grant_id.clone(), grant);
+        self.validate()
+    }
+
+    fn revoke_in_memory(&mut self, grant_id: &str) -> Result<()> {
+        if self.revoked_grants.contains(grant_id) {
+            return Err(Error::Rejected("consent grant is already revoked".into()));
+        }
+        if self.grants.remove(grant_id).is_none() {
+            return Err(Error::Invalid("unknown consent grant".into()));
+        }
+        self.revoked_grants.insert(grant_id.into());
+        self.validate()
+    }
+
+    /// Opens the current owner-controlled snapshot and persists every later
+    /// grant or revocation under a single-writer file lock.
+    pub fn open(path: impl AsRef<Path>) -> Result<Self> {
+        let path = path.as_ref().to_path_buf();
+        let _lock = acquire_file_lock(&path, "consent registry")?;
+        let mut registry = match Self::recover_locked(&path) {
+            Ok(registry) => registry,
+            Err(Error::Persistence(error)) if error.kind() == std::io::ErrorKind::NotFound => {
+                let registry = Self::default();
+                registry.write_snapshot(&path)?;
+                registry
+            }
+            Err(error) => return Err(error),
+        };
+        registry.persistence_path = Some(path);
+        Ok(registry)
+    }
+
+    /// Applies a grant update. Opened registries reload the latest snapshot
+    /// under the writer lock, so a stale handle cannot erase a revocation.
+    pub fn grant(&mut self, grant: ConsentGrant) -> Result<()> {
+        self.update_persistent(|registry| registry.grant_in_memory(grant.clone()))
+    }
+
+    /// Persists a terminal revocation before returning for an opened registry.
+    pub fn revoke(&mut self, grant_id: &str) -> Result<()> {
+        self.update_persistent(|registry| registry.revoke_in_memory(grant_id))
+    }
+
+    fn update_persistent(&mut self, update: impl FnOnce(&mut Self) -> Result<()>) -> Result<()> {
+        let Some(path) = self.persistence_path.clone() else {
+            return update(self);
+        };
+        let _lock = acquire_file_lock(&path, "consent registry")?;
+        let mut current = Self::recover_locked(&path)?;
+        update(&mut current)?;
+        current.write_snapshot(&path)?;
+        self.grants = current.grants;
+        self.revoked_grants = current.revoked_grants;
+        Ok(())
+    }
+
+    fn contains_active_grant(&self, grant: &ConsentGrant, now: u64) -> bool {
+        self.validate().is_ok()
+            && grant.validate().is_ok()
+            && self.grants.get(&grant.grant_id) == Some(grant)
+            && grant.active(now)
+    }
+
+    /// Returns true only while this exact grant is registered and active.
+    pub fn has_active_grant(&self, grant: &ConsentGrant, now: u64) -> bool {
+        if let Some(path) = &self.persistence_path {
+            let Ok(_lock) = acquire_file_lock(path, "consent registry") else {
+                return false;
+            };
+            return Self::recover_locked(path)
+                .is_ok_and(|current| current.contains_active_grant(grant, now));
+        }
+        self.contains_active_grant(grant, now)
+    }
+
+    /// Holds the persistent registry lock through the caller's consent-gated
+    /// effect. The closure must not re-enter this registry.
+    pub fn with_active_grant<T>(
+        &self,
+        grant: &ConsentGrant,
+        now: u64,
+        effect: impl FnOnce() -> Result<T>,
+    ) -> Result<T> {
+        if let Some(path) = &self.persistence_path {
+            let _lock = acquire_file_lock(path, "consent registry")?;
+            let current = Self::recover_locked(path)?;
+            if !current.contains_active_grant(grant, now) {
+                return Err(Error::Rejected("consent grant is not active".into()));
+            }
+            return effect();
+        }
+        if !self.contains_active_grant(grant, now) {
+            return Err(Error::Rejected("consent grant is not active".into()));
+        }
+        effect()
+    }
+
+    fn document(&self) -> ConsentDocument {
+        ConsentDocument {
+            version: CONSENT_FORMAT_VERSION,
+            grants: self.grants.values().cloned().collect(),
+            revoked_grants: self.revoked_grants.clone(),
+        }
+    }
+
+    fn write_snapshot(&self, path: &Path) -> Result<()> {
+        self.validate()?;
+        write_consent_snapshot(path, &canonical_bytes(&self.document())?)
+    }
+
+    /// Saves a one-time initial snapshot from an in-memory registry. Use
+    /// `open` for persistent state that will receive later updates.
+    pub fn save(&self, path: &Path) -> Result<()> {
+        if self.persistence_path.is_some() {
+            return Err(Error::Rejected(
+                "opened consent registries persist through grant and revoke".into(),
+            ));
+        }
+        let _lock = acquire_file_lock(path, "consent registry")?;
+        let temporary = path.with_extension("tmp");
+        if consent_snapshot_exists(path)? || consent_snapshot_exists(&temporary)? {
+            return Err(Error::Rejected(
+                "initial consent snapshot already exists; open it for updates".into(),
+            ));
+        }
+        self.write_snapshot(path)
+    }
+
+    pub fn load(path: &Path) -> Result<Self> {
+        let bytes = read_consent_snapshot(path)?;
+        let document: ConsentDocument = serde_json::from_slice(&bytes)?;
+        if document.version != CONSENT_FORMAT_VERSION || canonical_bytes(&document)? != bytes {
+            return Err(Error::Journal(
+                "consent registry bytes are noncanonical or unsupported".into(),
+            ));
+        }
+        let mut registry = Self {
+            grants: BTreeMap::new(),
+            revoked_grants: document.revoked_grants,
+            persistence_path: None,
+        };
+        for grant in document.grants {
+            grant.validate()?;
+            if registry
+                .grants
+                .insert(grant.grant_id.clone(), grant)
+                .is_some()
+            {
+                return Err(Error::Journal("duplicate consent grant identity".into()));
+            }
+        }
+        registry
+            .validate()
+            .map_err(|error| Error::Journal(format!("invalid consent registry: {error}")))?;
+        Ok(registry)
+    }
+
+    pub fn recover(path: &Path) -> Result<Self> {
+        let _lock = acquire_file_lock(path, "consent registry")?;
+        let mut registry = Self::recover_locked(path)?;
+        registry.persistence_path = Some(path.to_path_buf());
+        Ok(registry)
+    }
+
+    fn recover_locked(path: &Path) -> Result<Self> {
+        let temporary = path.with_extension("tmp");
+        if consent_snapshot_exists(&temporary)? {
+            let pending = Self::load(&temporary)?;
+            fs::rename(&temporary, path)?;
+            sync_parent_directory(path)?;
+            return Ok(pending);
+        }
+        Self::load(path)
+    }
+}
+
+fn consent_snapshot_exists(path: &Path) -> Result<bool> {
+    match fs::symlink_metadata(path) {
+        Ok(_) => Ok(true),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(error.into()),
+    }
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct TenantRetrieval {
     records: BTreeMap<(String, String), Value>,
-    grants: BTreeMap<String, ConsentGrant>,
 }
 
 impl TenantRetrieval {
@@ -219,33 +481,24 @@ impl TenantRetrieval {
         self.records.insert((tenant_id, resource_id), value);
         Ok(())
     }
-    pub fn grant(&mut self, grant: ConsentGrant) -> Result<()> {
-        grant.validate()?;
-        self.grants.insert(grant.grant_id.clone(), grant);
-        Ok(())
-    }
-    pub fn revoke(&mut self, grant_id: &str) {
-        self.grants.remove(grant_id);
-    }
+
     pub fn retrieve(
         &self,
         registry: &SpecialistRegistry,
+        consent_registry: &ConsentRegistry,
         grant: &ConsentGrant,
         resource_id: &str,
         now: u64,
     ) -> Result<Value> {
-        if grant.validate().is_err()
-            || self.grants.get(&grant.grant_id) != Some(grant)
-            || !grant.active(now)
-            || !grant.allows(resource_id)
-            || registry.resolve(&grant.specialist_id, now).is_none()
-        {
-            return Err(Error::Rejected("consent or specialist is invalid".into()));
-        }
-        self.records
-            .get(&(grant.tenant_id.clone(), resource_id.into()))
-            .cloned()
-            .ok_or_else(|| Error::Invalid("resource not found".into()))
+        consent_registry.with_active_grant(grant, now, || {
+            if !grant.allows(resource_id) || registry.resolve(&grant.specialist_id, now).is_none() {
+                return Err(Error::Rejected("consent or specialist is invalid".into()));
+            }
+            self.records
+                .get(&(grant.tenant_id.clone(), resource_id.into()))
+                .cloned()
+                .ok_or_else(|| Error::Invalid("resource not found".into()))
+        })
     }
 }
 
@@ -460,14 +713,11 @@ impl ToolRegistry {
 
     pub fn save(&self, path: &Path) -> Result<()> {
         self.validate()?;
-        let temporary = path.with_extension("tmp");
-        fs::write(&temporary, canonical_bytes(self)?)?;
-        fs::rename(temporary, path)?;
-        Ok(())
+        save_atomic_snapshot(path, &canonical_bytes(self)?, "tool registry")
     }
 
     pub fn load(path: &Path) -> Result<Self> {
-        let bytes = fs::read(path)?;
+        let bytes = read_regular_snapshot(path)?;
         let registry: Self = serde_json::from_slice(&bytes)?;
         if canonical_bytes(&registry)? != bytes {
             return Err(Error::Journal(
@@ -479,16 +729,7 @@ impl ToolRegistry {
     }
 
     pub fn recover(path: &Path) -> Result<Self> {
-        match Self::load(path) {
-            Ok(registry) => Ok(registry),
-            Err(Error::Persistence(error)) if error.kind() == std::io::ErrorKind::NotFound => {
-                let temporary = path.with_extension("tmp");
-                let registry = Self::load(&temporary)?;
-                fs::rename(temporary, path)?;
-                Ok(registry)
-            }
-            Err(error) => Err(error),
-        }
+        recover_atomic_snapshot(path, "tool registry", Self::load)
     }
 }
 

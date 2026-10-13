@@ -1,11 +1,14 @@
 //! Signed, pure-data replication records for the fixed maintenance operation.
 //!
-//! State slice: `security-alignment-os-foundation-v1`.
+//! State slices: `security-alignment-os-foundation-v1` and
+//! `maintenance-replication-runner-identity-v3`.
 //!
 //! This module accepts exactly two signed host reports for the one fixed
 //! maintenance process. It binds the reports to the same request, checkout
 //! baseline, process version, implementation revision, and containment or
-//! recovery scenarios. Host and operator labels are caller assertions; the
+//! recovery scenarios. V2 reports also bind the maintenance broker executable
+//! digest. V3 reports bind the replication runner executable digest. Host and
+//! operator labels are caller assertions; the
 //! signatures authenticate possession of the report keys, not a physical host
 //! or an independent human operator.
 
@@ -18,7 +21,9 @@ use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 
-pub const REPLICATION_VERSION: u8 = 1;
+pub const LEGACY_REPLICATION_VERSION: u8 = 1;
+pub const BROKER_IDENTITY_REPLICATION_VERSION: u8 = 2;
+pub const REPLICATION_VERSION: u8 = 3;
 pub const FIXED_OPERATION_IDENTITY: &str = crate::maintenance_process::FIXED_INPUT_IDENTITY;
 pub const REPLICATION_CLAIM_CEILING: &str =
     "local signed wire-consistency evidence for this fixed maintenance operation only";
@@ -113,6 +118,10 @@ pub struct HostReport {
     pub checkout_baseline_digest: String,
     pub baseline_manifest_digest: String,
     pub evaluator_executable_digest: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub maintenance_broker_executable_digest: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub replication_runner_executable_digest: Option<String>,
     pub evaluator_input_digest: String,
     pub evaluator_tests_digest: String,
     pub policy_digest: String,
@@ -146,6 +155,8 @@ pub struct ReplicationPacket {
     pub request: Request,
     pub baseline_manifest: Vec<BaselineManifestEntry>,
     pub evaluator_executable_digest: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub maintenance_broker_executable_digest: Option<String>,
     pub evaluator_input_digest: String,
     pub evaluator_tests_digest: String,
     pub policy_digest: String,
@@ -168,6 +179,10 @@ struct ReportIdentityPayload<'a> {
     checkout_baseline_digest: &'a str,
     baseline_manifest_digest: &'a str,
     evaluator_executable_digest: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    maintenance_broker_executable_digest: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    replication_runner_executable_digest: Option<&'a str>,
     evaluator_input_digest: &'a str,
     evaluator_tests_digest: &'a str,
     policy_digest: &'a str,
@@ -193,6 +208,10 @@ struct ReportSigningPayload<'a> {
     checkout_baseline_digest: &'a str,
     baseline_manifest_digest: &'a str,
     evaluator_executable_digest: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    maintenance_broker_executable_digest: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    replication_runner_executable_digest: Option<&'a str>,
     evaluator_input_digest: &'a str,
     evaluator_tests_digest: &'a str,
     policy_digest: &'a str,
@@ -219,6 +238,8 @@ struct PacketIdentityPayload<'a> {
     checkout_baseline_digest: &'a str,
     baseline_manifest_digest: &'a str,
     evaluator_executable_digest: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    maintenance_broker_executable_digest: Option<&'a str>,
     evaluator_input_digest: &'a str,
     evaluator_tests_digest: &'a str,
     policy_digest: &'a str,
@@ -237,6 +258,24 @@ fn valid_revision(value: &str) -> bool {
         && value
             .bytes()
             .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+}
+
+fn valid_broker_binding(version: u8, digest: Option<&str>) -> bool {
+    match version {
+        LEGACY_REPLICATION_VERSION => digest.is_none(),
+        BROKER_IDENTITY_REPLICATION_VERSION | REPLICATION_VERSION => {
+            digest.is_some_and(valid_digest)
+        }
+        _ => false,
+    }
+}
+
+fn valid_runner_binding(version: u8, digest: Option<&str>) -> bool {
+    match version {
+        LEGACY_REPLICATION_VERSION | BROKER_IDENTITY_REPLICATION_VERSION => digest.is_none(),
+        REPLICATION_VERSION => digest.is_some_and(valid_digest),
+        _ => false,
+    }
 }
 
 fn valid_public_key(value: &str) -> bool {
@@ -439,13 +478,28 @@ struct BaselineManifestPayload<'a> {
     entries: &'a [BaselineManifestEntry],
 }
 
-pub fn baseline_manifest_digest(entries: &[BaselineManifestEntry]) -> Result<String> {
+pub fn baseline_manifest_digest_for_version(
+    entries: &[BaselineManifestEntry],
+    replication_version: u8,
+) -> Result<String> {
+    if !matches!(
+        replication_version,
+        LEGACY_REPLICATION_VERSION | BROKER_IDENTITY_REPLICATION_VERSION | REPLICATION_VERSION
+    ) {
+        return Err(Error::Rejected(
+            "unsupported replication version for baseline manifest".into(),
+        ));
+    }
     validate_baseline_manifest(entries)?;
     digest(&BaselineManifestPayload {
-        version: REPLICATION_VERSION,
+        version: replication_version,
         state_slice: STATE_SLICE,
         entries,
     })
+}
+
+pub fn baseline_manifest_digest(entries: &[BaselineManifestEntry]) -> Result<String> {
+    baseline_manifest_digest_for_version(entries, REPLICATION_VERSION)
 }
 
 impl HostReport {
@@ -461,6 +515,12 @@ impl HostReport {
             checkout_baseline_digest: &self.checkout_baseline_digest,
             baseline_manifest_digest: &self.baseline_manifest_digest,
             evaluator_executable_digest: &self.evaluator_executable_digest,
+            maintenance_broker_executable_digest: self
+                .maintenance_broker_executable_digest
+                .as_deref(),
+            replication_runner_executable_digest: self
+                .replication_runner_executable_digest
+                .as_deref(),
             evaluator_input_digest: &self.evaluator_input_digest,
             evaluator_tests_digest: &self.evaluator_tests_digest,
             policy_digest: &self.policy_digest,
@@ -487,6 +547,12 @@ impl HostReport {
             checkout_baseline_digest: &self.checkout_baseline_digest,
             baseline_manifest_digest: &self.baseline_manifest_digest,
             evaluator_executable_digest: &self.evaluator_executable_digest,
+            maintenance_broker_executable_digest: self
+                .maintenance_broker_executable_digest
+                .as_deref(),
+            replication_runner_executable_digest: self
+                .replication_runner_executable_digest
+                .as_deref(),
             evaluator_input_digest: &self.evaluator_input_digest,
             evaluator_tests_digest: &self.evaluator_tests_digest,
             policy_digest: &self.policy_digest,
@@ -524,8 +590,13 @@ impl HostReport {
     }
 
     fn validate_shape(&self) -> Result<()> {
-        if self.version != REPLICATION_VERSION
-            || self.state_slice != STATE_SLICE
+        if !valid_broker_binding(
+            self.version,
+            self.maintenance_broker_executable_digest.as_deref(),
+        ) || !valid_runner_binding(
+            self.version,
+            self.replication_runner_executable_digest.as_deref(),
+        ) || self.state_slice != STATE_SLICE
             || self.operation != FIXED_OPERATION_IDENTITY
             || self.process_version != PROCESS_VERSION
             || !valid_revision(&self.implementation_revision)
@@ -652,6 +723,9 @@ impl ReplicationPacket {
             checkout_baseline_digest: &self.checkout_baseline_digest,
             baseline_manifest_digest: &self.baseline_manifest_digest,
             evaluator_executable_digest: &self.evaluator_executable_digest,
+            maintenance_broker_executable_digest: self
+                .maintenance_broker_executable_digest
+                .as_deref(),
             evaluator_input_digest: &self.evaluator_input_digest,
             evaluator_tests_digest: &self.evaluator_tests_digest,
             policy_digest: &self.policy_digest,
@@ -683,11 +757,12 @@ impl ReplicationPacket {
         validate_request_binding(&request)?;
         validate_baseline_manifest(&baseline_manifest)?;
         let request_digest = digest(&request)?;
-        let baseline_manifest_digest = baseline_manifest_digest(&baseline_manifest)?;
         reports.sort_by(|left, right| left.host_id.cmp(&right.host_id));
         let first = &reports[0];
+        let baseline_manifest_digest =
+            baseline_manifest_digest_for_version(&baseline_manifest, first.version)?;
         let packet = Self {
-            version: REPLICATION_VERSION,
+            version: first.version,
             state_slice: STATE_SLICE.into(),
             operation: FIXED_OPERATION_IDENTITY.into(),
             process_version: PROCESS_VERSION,
@@ -697,6 +772,9 @@ impl ReplicationPacket {
             checkout_baseline_digest: request.checkout_baseline_digest.clone(),
             baseline_manifest_digest,
             evaluator_executable_digest: first.evaluator_executable_digest.clone(),
+            maintenance_broker_executable_digest: first
+                .maintenance_broker_executable_digest
+                .clone(),
             evaluator_input_digest: first.evaluator_input_digest.clone(),
             evaluator_tests_digest: first.evaluator_tests_digest.clone(),
             policy_digest: first.policy_digest.clone(),
@@ -715,8 +793,10 @@ impl ReplicationPacket {
     }
 
     pub fn validate(&self) -> Result<()> {
-        if self.version != REPLICATION_VERSION
-            || self.state_slice != STATE_SLICE
+        if !valid_broker_binding(
+            self.version,
+            self.maintenance_broker_executable_digest.as_deref(),
+        ) || self.state_slice != STATE_SLICE
             || self.operation != FIXED_OPERATION_IDENTITY
             || self.process_version != PROCESS_VERSION
             || !valid_revision(&self.implementation_revision)
@@ -743,7 +823,8 @@ impl ReplicationPacket {
         validate_request_binding(&self.request)?;
         if digest(&self.request)? != self.request_digest
             || self.request.checkout_baseline_digest != self.checkout_baseline_digest
-            || baseline_manifest_digest(&self.baseline_manifest)? != self.baseline_manifest_digest
+            || baseline_manifest_digest_for_version(&self.baseline_manifest, self.version)?
+                != self.baseline_manifest_digest
         {
             return Err(Error::Rejected(
                 "maintenance replication bundle digest mismatch".into(),
@@ -757,6 +838,7 @@ impl ReplicationPacket {
         for report in &self.reports {
             report.validate()?;
             if report.state_slice != self.state_slice
+                || report.version != self.version
                 || report.operation != self.operation
                 || report.process_version != self.process_version
                 || report.implementation_revision != self.implementation_revision
@@ -765,6 +847,8 @@ impl ReplicationPacket {
                 || report.checkout_baseline_digest != self.checkout_baseline_digest
                 || report.baseline_manifest_digest != self.baseline_manifest_digest
                 || report.evaluator_executable_digest != self.evaluator_executable_digest
+                || report.maintenance_broker_executable_digest
+                    != self.maintenance_broker_executable_digest
                 || report.evaluator_input_digest != self.evaluator_input_digest
                 || report.evaluator_tests_digest != self.evaluator_tests_digest
                 || report.policy_digest != self.policy_digest

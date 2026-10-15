@@ -40,9 +40,7 @@ pnpm run lint
 
 The Rust test suite exercises completion, rollback, specialist consent, local
 audit persistence, one fixed integer-sum receipt, and offline crypto-adapter
-replay/reconciliation. It makes no provider calls or settlement transactions.
-audit persistence, and one fixed integer-sum receipt. It makes no provider
-calls or settlement transactions. The Confidential Space and Nitro runner
+replay/reconciliation. It makes no provider calls or settlement transactions. The Confidential Space and Nitro runner
 binaries use platform attestation interfaces only when launched in those
 environments. Hermetic local tests execute the workload functions against
 actual local runner, broker, and evaluator binaries, using synthetic protocol
@@ -72,8 +70,6 @@ are installed.
 | `adaptation` | Proposal-only candidate and local work-offer selection; shadow staging only, with no execution or settlement authority |
 | `adapters` | Validates typed external sandbox and invocation requests; does not execute them |
 | `alignment` | Digest-bound prediction/configuration lock; no model execution or assessment effect |
-| `Kernel`, `ReplayJournal` | Validated policy, exact issuer/candidate/policy binding, claim expiry, budgets, single-use execution, lifecycle enforcement, and locked, synced caller-owned snapshot persistence |
-| `checker` | Independent local recomputation of replay, lifecycle, audit, fixed-job, and signed-capability receipt invariants |
 | `EvidenceRegistry` | Subject-bound evidence, distinct local review roles, freshness, revocation, and canonical persistence/recovery |
 | `benchmark` | Deterministic local adversarial contract cases across fit, tune, and assessment labels; no model execution |
 | `artifacts` | Quarantined artifact manifests with subject/source/provenance digests, retention, review, revocation, and canonical persistence/recovery |
@@ -83,8 +79,7 @@ are installed.
 | `property` | Exhaustive local lattice/lifecycle checks and digest-only invariant reports |
 | `receipts` | Ed25519-signed capability and post-validation execution receipts with exact binding and local replay rejection |
 | `execution_gate` | Typed sandbox/request boundary that validates controls and remains blocked locally |
-| `broker`, `capability_broker`, `capability_supervisor` | Separate Unix IPC broker, broker-only receipt issuer, staged root-level Markdown trailing-space transformation, canonical journal, timeout/cancellation kill paths, network-denied host sandbox, and frozen crash recovery |
-| `broker`, `capability_broker`, `capability_supervisor`, `sandbox` | Separate Unix IPC broker, broker-only receipt issuer, staged uppercase file transformation, canonical journal, process-group timeout/kill path, bounded child output, network-denied macOS Seatbelt sandbox, and frozen crash recovery |
+| `broker`, `capability_broker`, `capability_supervisor`, `sandbox` | Separate Unix IPC broker, broker-only receipt issuer, staged root-level Markdown trailing-space transformation, canonical journal, timeout/cancellation kill paths, network-denied host sandbox, and frozen crash recovery |
 | `broker_adversarial_runner` | Separate hostile client for direct supervisor, path escape, replay, forged receipt, malformed child operation, and telemetry containment attempts |
 | `maintenance_replication` | Canonical, signed two-report v2 packet binding the maintenance broker executable digest; legacy v1 packets remain verifiable without that binding |
 | `maintenance_replication_runner` | Operator-controlled freeze, isolated 20-scenario real-process execution, per-launch broker digest checks, private evidence capture, signed host-report production, and packet assembly |
@@ -95,7 +90,6 @@ are installed.
 | `specialist`, `memory` | Immutable specialist identities, a shared canonical consent/revocation registry, consented retrieval, redacted telemetry, frozen tool manifests, and durable memory with caller-owned consent recovery |
 | `routing` | Digest-only caller-selected specialist routing bound to active tenant consent and immutable identity |
 | `integration` | Evidence-bound workflow execution, receipt-gated execution, broker completion acceptance with pinned identity and output recomputation, lifecycle completion/quarantine, observation, rollback, freeze, and kill disposition |
-| `integration` | Evidence-bound workflow execution, receipt-gated execution, lifecycle completion/quarantine, observation, rollback, freeze, and kill disposition |
 | `maintenance` | In-memory fixed-packet workflow contract; hermetic executor only |
 | `maintenance_transaction`, `maintenance_patch_broker`, `maintenance_patch_evaluator` | Transaction-bound replacement of existing allow-listed files across immutable local generations, with signed structural evaluation under macOS Seatbelt or the Linux namespace, Landlock, seccomp, and address-space backend. Uses a fresh per-launch token, bounded evaluator time and output, replay fencing, atomic pointer publication, durable receipts, cancellation, crash recovery, and writer locking. Linux runtime probes require unprivileged user namespaces and Landlock ABI 9 or newer; this checkout only compile-checked the x86_64 backend, without Linux runtime execution or aarch64 compile validation. Candidate code and tests are not run. |
 | `market` | Fixed local sum with job/input commitments, typed exact-offer receipts, result recomputation, binding/timeout/replay checks, and an authorization-required settlement proposal |
@@ -187,3 +181,9 @@ The Rust implementation extends this repository directly and uses the HSAI
 840–842 plan plus eligible local/public references recorded in the intake
 manifest. No closed research artifacts, scientific corpora, traces or model
 outputs were imported.
+
+## Research report and project policy
+
+See [RESEARCH.md](RESEARCH.md) for the research report and findings,
+[SECURITY.md](SECURITY.md) to report issues, and [CONTRIBUTING.md](CONTRIBUTING.md).
+Licensed under [Apache-2.0](LICENSE).

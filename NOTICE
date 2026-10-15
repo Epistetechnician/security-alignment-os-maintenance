@@ -1,0 +1,9 @@
+Copyright 2026 Epistetechnician and contributors
+
+Licensed under the Apache License, Version 2.0. See LICENSE.
+
+This repository is research software. Results recorded here are bounded local
+or synthetic observations governed by the claim boundaries in RESEARCH.md and
+AGENTS.md. Nothing here is a security guarantee, a proof of production
+readiness, a benchmark leaderboard result, or independent verification unless a
+record says so explicitly.

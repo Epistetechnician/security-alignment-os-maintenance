@@ -101,7 +101,7 @@
   "unavailable_sources": [
     {
       "repository": "hypersacredai",
-      "path": "/Users/shaanp/Documents/GitHub/hypersacredai",
+      "path": "<unavailable local checkout>",
       "status": "checkout not present locally; no source inspected or copied"
     }
   ],

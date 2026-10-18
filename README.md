@@ -1,12 +1,28 @@
 <!-- readme-v2:begin -->
 # Security Alignment OS
 
-[![CI](https://github.com/Epistetechnician/security-alignment-os-maintenance/actions/workflows/ci.yml/badge.svg)](https://github.com/Epistetechnician/security-alignment-os-maintenance/actions/workflows/ci.yml) [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE) ![visibility: private staging](https://img.shields.io/badge/release-private%20staging-lightgrey) ![claims: bounded](https://img.shields.io/badge/claims-bounded%20local-orange)
+[![CI](https://github.com/Epistetechnician/security-alignment-os-maintenance/actions/workflows/ci.yml/badge.svg)](https://github.com/Epistetechnician/security-alignment-os-maintenance/actions/workflows/ci.yml) [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE) ![claims: bounded](https://img.shields.io/badge/claims-bounded%20local-orange)
 
 > State slice: `security-alignment-os-foundation-v1`.
 
+## Start here
+
+**Question.** Can an autonomous agent's proposal-to-rollback loop be built so that an untrusted proposal can act only through evidence, deterministic admission, a single-use capability, a separate broker and a sandbox, with every failure closing to freeze or rollback?
+
+**Headline result.** A Rust reference implementation with **279 tests passing**, including an adversarial runner that attacks the broker directly (path escape, replay, forged receipts, malformed child operations). One execution on a Confidential Space Intel TDX instance passed all 20 required scenarios under a signed attestation.
+
+**What it does not show.** No model runs in the loop, so this is a control plane, not a safe agent. The TDX run is a machine-attested reproduction, **not** an independent replication. Persisted state is plaintext, and there is no protection against a hostile process under the same user ID. The gaps are listed in [RESEARCH.md](RESEARCH.md).
+
+**Reproduce.** Local, no cloud account:
+
+```sh
+cargo test --all-targets
+cargo clippy --all-targets -- -D warnings
+```
+
 ## Contents
 
+- [Start here](#start-here)
 - [At a glance](#at-a-glance)
 - [Key findings](#key-findings)
 - [Verification and CI/CD acceptance](#verification-and-cicd-acceptance)
@@ -20,7 +36,7 @@
 | | |
 |---|---|
 | Stack | Rust (stable) |
-| Release stage | Private staging for research release; not yet public |
+| Release stage | Public research release |
 | License | Apache-2.0 (see [LICENSE](LICENSE), [NOTICE](NOTICE)) |
 | Research report | [RESEARCH.md](RESEARCH.md) |
 | Last full acceptance run | 2026-10-14 |

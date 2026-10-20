@@ -451,7 +451,7 @@ mod tests {
         let (verified, binding) = bound_envelope("verified", &evidence);
         let packet = AggregateReleasePacket::from_envelopes(
             "packet-1",
-            &[verified.clone()],
+            std::slice::from_ref(&verified),
             &[binding],
             &evidence,
             50,
@@ -461,7 +461,7 @@ mod tests {
         assert_eq!(first, packet.digest().expect("digest"));
         assert!(!packet.raw_payload_included);
         packet
-            .validate_current(&[verified.clone()], &evidence, 51)
+            .validate_current(std::slice::from_ref(&verified), &evidence, 51)
             .expect("packet evidence remains current");
 
         let mut revoked = evidence.clone();
@@ -481,7 +481,7 @@ mod tests {
         wrong_subject.subject_digest = "b".repeat(64);
         assert!(AggregateReleasePacket::from_envelopes(
             "wrong-subject",
-            &[envelope.clone()],
+            std::slice::from_ref(&envelope),
             &[wrong_subject],
             &evidence,
             50,
@@ -490,14 +490,14 @@ mod tests {
 
         let packet = AggregateReleasePacket::from_envelopes(
             "packet-1",
-            &[envelope.clone()],
+            std::slice::from_ref(&envelope),
             &[binding],
             &evidence,
             50,
         )
         .expect("packet");
         assert!(packet
-            .validate_current(&[envelope.clone()], &evidence, 90)
+            .validate_current(std::slice::from_ref(&envelope), &evidence, 90)
             .is_err());
 
         let mut changed_claim = envelope;
@@ -526,8 +526,8 @@ mod tests {
         .expect("held evidence");
         assert!(AggregateReleasePacket::from_envelopes(
             "held-evidence",
-            &[envelope.clone()],
-            &[binding.clone()],
+            std::slice::from_ref(&envelope),
+            std::slice::from_ref(&binding),
             &held,
             50,
         )

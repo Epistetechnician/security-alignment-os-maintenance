@@ -426,14 +426,14 @@ fn claim_meet_cannot_expand_scope_and_external_execution_stays_blocked() {
     };
     let packet = AggregateReleasePacket::from_envelopes(
         "local-e2e",
-        &[met.clone()],
+        std::slice::from_ref(&met),
         &[binding],
         &evidence,
         20,
     )
     .expect("evidence-bound aggregate packet");
     packet
-        .validate_current(&[met.clone()], &evidence, 21)
+        .validate_current(std::slice::from_ref(&met), &evidence, 21)
         .expect("revalidate exact claim and accepted local evidence");
 
     let candidate = CandidateUpdate {
@@ -467,7 +467,7 @@ fn claim_meet_cannot_expand_scope_and_external_execution_stays_blocked() {
         .advance_with_packet(
             "claim-packet-candidate",
             &packet,
-            &[met.clone()],
+            std::slice::from_ref(&met),
             &evidence,
             21,
         )
@@ -507,7 +507,7 @@ fn claim_meet_cannot_expand_scope_and_external_execution_stays_blocked() {
     };
     let next_packet = AggregateReleasePacket::from_envelopes(
         "local-canary-packet",
-        &[next_claim.clone()],
+        std::slice::from_ref(&next_claim),
         &[next_binding],
         &evidence,
         22,

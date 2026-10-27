@@ -1078,11 +1078,7 @@ impl Broker {
                             .chars()
                             .take(96)
                             .collect::<String>();
-                        return Err(format!(
-                            "supervisor_failed_{}_{}",
-                            status.code().unwrap_or(-1),
-                            digest_bytes(detail.as_bytes())
-                        ));
+                        return Err(supervisor_failure_code(status.code(), &detail));
                     }
                     let outcome = read_supervisor_output(&mut child)?;
                     if outcome.output_digest != job.expected_output_digest {
@@ -1294,6 +1290,23 @@ fn sandbox_command(
     .map_err(|_| "supervisor_spawn_failed".to_owned())
 }
 
+/// Stable failure code for a supervisor that exited unsuccessfully.
+///
+/// `unshare` reports a refused user namespace (for example Ubuntu's AppArmor restriction on
+/// unprivileged user namespaces) on its own stderr before the supervisor starts. That is a missing
+/// platform capability, not a supervisor fault, so it gets its own code instead of an opaque digest.
+/// Both cases remain errors, so the broker still fails closed.
+fn supervisor_failure_code(exit_code: Option<i32>, first_stderr_line: &str) -> String {
+    if first_stderr_line.starts_with("unshare:") {
+        return "linux_sandbox_denied".to_owned();
+    }
+    format!(
+        "supervisor_failed_{}_{}",
+        exit_code.unwrap_or(-1),
+        digest_bytes(first_stderr_line.as_bytes())
+    )
+}
+
 #[cfg(target_os = "linux")]
 fn sandbox_command(
     supervisor: &Path,
@@ -1462,5 +1475,31 @@ mod transform_tests {
         fs::write(&source, b"content").expect("source");
         fs::hard_link(&source, &alias).expect("hard link");
         assert!(!is_unlinked_regular_file(&source));
+    }
+}
+
+#[cfg(test)]
+mod supervisor_failure_code_tests {
+    use super::supervisor_failure_code;
+
+    #[test]
+    fn refused_user_namespace_gets_a_dedicated_code() {
+        for line in [
+            "unshare: unshare failed: Operation not permitted",
+            "unshare: write failed /proc/self/uid_map: Operation not permitted",
+        ] {
+            assert_eq!(
+                supervisor_failure_code(Some(1), line),
+                "linux_sandbox_denied"
+            );
+        }
+    }
+
+    #[test]
+    fn other_supervisor_failures_keep_the_digest_code() {
+        let code = supervisor_failure_code(Some(2), "supervisor: bad job file");
+        assert!(code.starts_with("supervisor_failed_2_"));
+        assert_ne!(code, "linux_sandbox_denied");
+        assert!(supervisor_failure_code(None, "").starts_with("supervisor_failed_-1_"));
     }
 }
